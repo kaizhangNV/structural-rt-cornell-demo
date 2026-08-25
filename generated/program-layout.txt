@@ -1,0 +1,5 @@
+structural-ray-tracing-layout 1
+hit 1 PrimaryHitGroup PrimaryClosestHit - -
+hit 4 ShadowHitGroup ShadowClosestHit - -
+miss 1 PrimaryMissGroup PrimaryMiss
+miss 4 ShadowMissGroup ShadowMiss

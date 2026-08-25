@@ -1,0 +1,20 @@
+module miss;
+
+import slang.raytracing;
+import shared;
+
+public struct PrimaryMiss : rt::IMissShader<MissContext>
+{
+    void invoke(rt::MissInput<MissContext> input)
+    {
+        input.payload.hit = 0;
+    }
+}
+
+public struct ShadowMiss : rt::IMissShader<MissContext>
+{
+    void invoke(rt::MissInput<MissContext> input)
+    {
+        input.payload.occluded = 0;
+    }
+}
