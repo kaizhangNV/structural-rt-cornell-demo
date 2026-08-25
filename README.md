@@ -10,7 +10,7 @@ is no path-tracing or accumulation loop.
 
 ## Video
 
-[![Cornell box ray-tracing demo][demo-poster]][demo-video]
+[![Cornell box ray-tracing demo][demo-preview]][demo-video]
 
 Click the image to play the three-second screen recording with a small interactive camera pan.
 
@@ -113,5 +113,5 @@ With the current compiler and scene, both headless hosts produce checksum `77762
 - `macos-metal-layer.mm`: minimal bridge attaching a Metal layer to GLFW's native macOS window.
 - `run-linux.sh` and `run-macos.sh`: local build-and-run helpers.
 
-[demo-poster]: media/cornell-box-demo-poster.png
+[demo-preview]: media/cornell-box-demo.gif
 [demo-video]: https://raw.githubusercontent.com/kaizhangNV/structural-rt-cornell-demo/main/media/cornell-box-demo.webm
