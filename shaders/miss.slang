@@ -1,7 +1,4 @@
-module miss;
-
-import slang.raytracing;
-import shared;
+implementing rt_pipeline;
 
 public struct PrimaryMiss : rt::IMissShader<MissContext>
 {

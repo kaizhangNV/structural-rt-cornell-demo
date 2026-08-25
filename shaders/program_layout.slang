@@ -1,9 +1,4 @@
-module program_layout;
-
-import slang.raytracing;
-import hit;
-import miss;
-import shared;
+implementing rt_pipeline;
 
 // Slots 1 and 4 are intentionally sparse. This demonstrates the intended programming model:
 // the host reflects ProgramLayout, allocates its SBT through the largest reflected slot, and

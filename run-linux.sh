@@ -23,7 +23,7 @@ CMAKE_BUILD_PARALLEL_LEVEL=8 cmake --build "$demo_root/build/glfw" --parallel 8
 (
     cd "$demo_root"
     "$slang_build/$config/bin/slangc" \
-        shaders/raygen.slang \
+        shaders/rt_pipeline.slang \
         -experimental-feature \
         -entry main \
         -stage raygeneration \

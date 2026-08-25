@@ -78,35 +78,35 @@ struct rt_RayTraversalDesc_0
 };
 
 
-#line 28 "shaders/raygen.slang"
+#line 1084 "core"
 rt_RayTraversalDesc_0 rt_RayTraversalDesc_x24init_0(const RayDesc_0 thread* ray_1, float time_1, uint rayFlags_1, uint instanceMask_1, uint sbtOffset_1, uint sbtStride_1, uint missIndex_1)
 {
 
-#line 28
+#line 1084
     thread rt_RayTraversalDesc_0 _S3;
 
-#line 28
+#line 1084
     (&_S3)->ray_0 = *ray_1;
 
-#line 28
+#line 1084
     (&_S3)->time_0 = time_1;
 
-#line 28
+#line 1084
     (&_S3)->rayFlags_0 = rayFlags_1;
 
-#line 28
+#line 1084
     (&_S3)->instanceMask_0 = instanceMask_1;
 
-#line 28
+#line 1084
     (&_S3)->sbtOffset_0 = sbtOffset_1;
 
-#line 28
+#line 1084
     (&_S3)->sbtStride_0 = sbtStride_1;
 
-#line 28
+#line 1084
     (&_S3)->missIndex_0 = missIndex_1;
 
-#line 28
+#line 1084
     return _S3;
 }
 
@@ -162,44 +162,44 @@ rt_RayTraversalDesc_0 makeRay_0(float3 origin_0, float3 direction_0, float tMax_
 }
 
 
-#line 12 "shaders/raygen.slang"
+#line 8 "shaders/raygen.slang"
 uint packColor_0(float3 linearColor_0, bool bgra_0)
 {
 
     uint3 _S8 = uint3(sqrt(saturate(linearColor_0)) * float3(255.0f)  + float3(0.5f) );
 
-#line 15
+#line 11
     uint _S9;
     if(bgra_0)
     {
 
-#line 16
+#line 12
         _S9 = (((_S8.z) | ((_S8.y) << 8U)) | ((_S8.x) << 16U)) | 4278190080U;
 
-#line 16
+#line 12
     }
     else
     {
 
-#line 16
+#line 12
         _S9 = (((_S8.x) | ((_S8.y) << 8U)) | ((_S8.z) << 16U)) | 4278190080U;
 
-#line 16
+#line 12
     }
 
-#line 16
+#line 12
     return _S9;
 }
 
 
-#line 16
+#line 12
 struct ProgramLayout_rayData_0
 {
     RayPayload_0 payload_0;
 };
 
 
-#line 16
+#line 12
 struct rt_TraceProgramDescriptorResources_default_0
 {
     metal::raytracing::intersection_function_table<metal::raytracing::instancing> intersectionFunctions_0;
@@ -210,7 +210,7 @@ struct rt_TraceProgramDescriptorResources_default_0
 };
 
 
-#line 16
+#line 12
 struct Surface_natural_0
 {
     packed_float4 normal_2;
@@ -249,95 +249,95 @@ struct KernelContext_0
 };
 
 
-#line 21 "shaders/raygen.slang"
-[[kernel]] void main_0(uint3 dispatchRaysIndex_0 [[thread_position_in_grid]], metal::raytracing::acceleration_structure<metal::raytracing::instancing> scene_1 [[buffer(1)]], rt_TraceProgramDescriptorResources_default_0 constant* program_resources_1 [[buffer(2)]], Surface_natural_0 device* surfaces_1 [[buffer(4)]], uint device* output_1 [[buffer(3)]], GlobalParams_0 constant* globalParams_1 [[buffer(0)]])
+#line 17 "shaders/raygen.slang"
+[[kernel]] void main_0(uint3 dispatchRaysIndex_0 [[thread_position_in_grid]], metal::raytracing::acceleration_structure<metal::raytracing::instancing> scene_1 [[buffer(2)]], rt_TraceProgramDescriptorResources_default_0 constant* program_resources_1 [[buffer(3)]], Surface_natural_0 device* surfaces_1 [[buffer(1)]], uint device* output_1 [[buffer(4)]], GlobalParams_0 constant* globalParams_1 [[buffer(0)]])
 {
 
-#line 21
+#line 17
     thread KernelContext_0 kernelContext_0;
 
-#line 21
+#line 17
     (&kernelContext_0)->scene_0 = scene_1;
 
-#line 21
+#line 17
     (&kernelContext_0)->program_resources_0 = program_resources_1;
 
-#line 21
+#line 17
     (&kernelContext_0)->surfaces_0 = surfaces_1;
 
-#line 21
+#line 17
     (&kernelContext_0)->output_0 = output_1;
 
-#line 21
+#line 17
     (&kernelContext_0)->globalParams_0 = globalParams_1;
 
     uint2 pixel_0 = dispatchRaysIndex_0.xy;
     uint _S10 = pixel_0.x;
 
-#line 24
+#line 20
     bool _S11;
 
-#line 24
+#line 20
     if(_S10 >= (globalParams_1->frame_0.imageSize_0.x))
     {
 
-#line 24
+#line 20
         _S11 = true;
 
-#line 24
+#line 20
     }
     else
     {
 
-#line 24
+#line 20
         _S11 = (pixel_0.y) >= (globalParams_1->frame_0.imageSize_0.y);
 
-#line 24
+#line 20
     }
 
-#line 24
+#line 20
     if(_S11)
     {
 
-#line 25
+#line 21
         return;
     }
     float2 _S12 = (float2(pixel_0) + float2(0.5f) ) / float2(globalParams_1->frame_0.imageSize_0) * float2(2.0f)  - float2(1.0f) ;
 
-#line 27
+#line 23
     thread float2 ndc_0 = _S12;
     ndc_0.y = - _S12.y;
 
-#line 28
+#line 24
     float3 _S13 = float3(0.62000000476837158f) ;
 
 #line 16 "shaders/shared.slang"
     float3 _S14 = float3(0.0f) ;
 
-#line 35 "shaders/raygen.slang"
+#line 31 "shaders/raygen.slang"
     RayPayload_0 payload_1 = RayPayload_x24init_0(_S14, _S14, _S14, 0U, 0U);
 
     rt_RayTraversalDesc_0 _S15 = makeRay_0(globalParams_1->frame_0.cameraPosition_0.xyz, normalize(globalParams_1->frame_0.cameraForward_0.xyz + globalParams_1->frame_0.cameraRight_0.xyz * float3(ndc_0.x)  * float3((float(globalParams_1->frame_0.imageSize_0.x) / float(globalParams_1->frame_0.imageSize_0.y)))  * _S13 + globalParams_1->frame_0.cameraUp_0.xyz * float3(ndc_0.y)  * _S13), 100.0f, 1U);
 
-#line 37
+#line 33
     metal::raytracing::intersection_function_table<metal::raytracing::instancing> _S16 = (&kernelContext_0)->program_resources_0->intersectionFunctions_0;
 
-#line 37
+#line 33
     metal::visible_function_table<void(ProgramLayout_rayData_0 thread*)> _S17 = (&kernelContext_0)->program_resources_0->missFunctions_0;
 
-#line 37
+#line 33
     metal::visible_function_table<void(ProgramLayout_rayData_0 thread*, float, float3, float3, uint, uchar thread*)> _S18 = (&kernelContext_0)->program_resources_0->closestHitFunctions_0;
 
-#line 37
+#line 33
     uint32_t device* _S19 = (&kernelContext_0)->program_resources_0->records_0;
 
-#line 37
+#line 33
     thread ProgramLayout_rayData_0 rayData_0;
 
-#line 37
+#line 33
     (&rayData_0)->payload_0 = payload_1;
 
-#line 37
+#line 33
     {
         metal::raytracing::intersector<metal::raytracing::instancing> _slang_intersector;
         _slang_intersector.assume_geometry_type(metal::raytracing::geometry_type::triangle);
@@ -367,13 +367,13 @@ struct KernelContext_0
         }
     }
 
-#line 37
+#line 33
     RayPayload_0 payload_2 = (&rayData_0)->payload_0;
 
-#line 42
+#line 38
     float3 _S20 = float3(0.01200000010430813f, 0.01499999966472387f, 0.01999999955296516f);
 
-#line 42
+#line 38
     float3 color_0;
     if(((&rayData_0)->payload_0.hit_0) != 0U)
     {
@@ -386,25 +386,25 @@ struct KernelContext_0
 
         rt_RayTraversalDesc_0 _S21 = makeRay_0(payload_2.hitPosition_0 + payload_2.normal_0 * float3(0.0020000000949949f) , lightDirection_0, lightDistance_0 - 0.00400000018998981f, 4U);
 
-#line 52
+#line 48
         metal::raytracing::intersection_function_table<metal::raytracing::instancing> _S22 = (&kernelContext_0)->program_resources_0->intersectionFunctions_0;
 
-#line 52
+#line 48
         metal::visible_function_table<void(ProgramLayout_rayData_0 thread*)> _S23 = (&kernelContext_0)->program_resources_0->missFunctions_0;
 
-#line 52
+#line 48
         metal::visible_function_table<void(ProgramLayout_rayData_0 thread*, float, float3, float3, uint, uchar thread*)> _S24 = (&kernelContext_0)->program_resources_0->closestHitFunctions_0;
 
-#line 52
+#line 48
         uint32_t device* _S25 = (&kernelContext_0)->program_resources_0->records_0;
 
-#line 52
+#line 48
         thread ProgramLayout_rayData_0 rayData_1;
 
-#line 52
+#line 48
         (&rayData_1)->payload_0 = payload_1;
 
-#line 52
+#line 48
         {
             metal::raytracing::intersector<metal::raytracing::instancing> _slang_intersector;
             _slang_intersector.assume_geometry_type(metal::raytracing::geometry_type::triangle);
@@ -434,89 +434,89 @@ struct KernelContext_0
             }
         }
 
-#line 52
+#line 48
         float visibility_0;
 
-#line 61
+#line 57
         if(((&rayData_1)->payload_0.occluded_0) == 0U)
         {
 
-#line 61
+#line 57
             visibility_0 = 1.0f;
 
-#line 61
+#line 57
         }
         else
         {
 
-#line 61
+#line 57
             visibility_0 = 0.0f;
 
-#line 61
+#line 57
         }
 
-#line 61
+#line 57
         color_0 = payload_2.albedo_0 * float3((0.10000000149011612f + visibility_0 * max(dot(payload_2.normal_0, lightDirection_0), 0.0f) * (2.79999995231628418f / (1.0f + 0.20000000298023224f * lightDistance_0 * lightDistance_0)))) ;
 
-#line 43
+#line 39
     }
     else
     {
 
-#line 43
+#line 39
         color_0 = _S20;
 
-#line 43
+#line 39
     }
 
-#line 68
+#line 64
     *((&kernelContext_0)->output_0+(pixel_0.y * globalParams_1->frame_0.rowStride_0 + _S10)) = packColor_0(color_0, (globalParams_1->frame_0.outputBgra_0) != 0U);
 
     return;
 }
 
 
-#line 70
+#line 66
 [[visible]] void ShadowMiss_0(ProgramLayout_rayData_0 thread* rayData_2)
 {
 
-#line 18 "shaders/miss.slang"
+#line 15 "shaders/miss.slang"
     (&rayData_2->payload_0)->occluded_0 = 0U;
 
-#line 18
+#line 15
     return;
 }
 
 
-#line 18
+#line 15
 [[visible]] void PrimaryMiss_0(ProgramLayout_rayData_0 thread* rayData_3)
 {
 
-#line 10
+#line 7
     (&rayData_3->payload_0)->hit_0 = 0U;
 
-#line 10
+#line 7
     return;
 }
 
 
-#line 10
+#line 7
 [[visible]] void ShadowClosestHit_0(ProgramLayout_rayData_0 thread* rayData_4, float distance_0, float3 worldSpaceOrigin_0, float3 worldSpaceDirection_0, uint primitiveIndex_0, uchar thread* kernelContext_1)
 {
 
-#line 25 "shaders/hit.slang"
+#line 22 "shaders/hit.slang"
     (&rayData_4->payload_0)->occluded_0 = 1U;
 
-#line 25
+#line 22
     return;
 }
 
 
-#line 25
+#line 22
 [[visible]] void PrimaryClosestHit_0(ProgramLayout_rayData_0 thread* rayData_5, float distance_1, float3 worldSpaceOrigin_1, float3 worldSpaceDirection_1, uint primitiveIndex_1, uchar thread* kernelContext_2)
 {
 
-#line 12
+#line 9
     Surface_natural_0 surface_0 = ((KernelContext_0 thread*)(kernelContext_2))->surfaces_0[primitiveIndex_1];
     (&rayData_5->payload_0)->hitPosition_0 = worldSpaceOrigin_1 + worldSpaceDirection_1 * float3(distance_1) ;
 
@@ -524,6 +524,6 @@ struct KernelContext_0
     (&rayData_5->payload_0)->albedo_0 = (float4(surface_0.albedo_2) ).xyz;
     (&rayData_5->payload_0)->hit_0 = 1U;
 
-#line 17
+#line 14
     return;
 }

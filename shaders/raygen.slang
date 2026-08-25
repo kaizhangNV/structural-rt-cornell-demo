@@ -1,8 +1,4 @@
-module raygen;
-
-import slang.raytracing;
-import program_layout;
-import shared;
+implementing rt_pipeline;
 
 rt::AccelerationStructure scene;
 rt::TraceProgramDescriptor<ProgramLayout> program;

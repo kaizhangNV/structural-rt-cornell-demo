@@ -1,7 +1,4 @@
-module hit;
-
-import slang.raytracing;
-import shared;
+implementing rt_pipeline;
 
 public StructuredBuffer<Surface> surfaces;
 

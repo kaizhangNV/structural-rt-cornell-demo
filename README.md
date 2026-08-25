@@ -58,8 +58,8 @@ This writes `cornell-box-vulkan.ppm`.
 
 The slang-rhi host calls `findTraceProgramLayout("ProgramLayout")` and enumerates the reflected hit,
 miss, and callable groups. Their reflected slots determine the pipeline and shader-table indices;
-their reflected stage names locate synthesized entry points in the root or transitively loaded
-shader modules. No stage-table index is inferred from source declaration order.
+their reflected stage names locate synthesized entry points in `rt_pipeline`. No stage-table index
+is inferred from source declaration order.
 
 ## macOS: Metal-cpp
 
@@ -92,11 +92,14 @@ With the current compiler and scene, both headless hosts produce checksum `77762
 
 ## Files
 
-- `shaders/shared.slang`: shared payload, contexts, frame data, and ray construction.
-- `shaders/hit.slang`: primary and shadow closest-hit stages.
-- `shaders/miss.slang`: primary and shadow miss stages.
-- `shaders/program_layout.slang`: the structural SBT declaration, including sparse slots 1 and 4.
-- `shaders/raygen.slang`: ray-generation entry point and direct-lighting orchestration.
+- `shaders/shared.slang`: imported module containing the shared payload, contexts, frame data, and
+  ray construction.
+- `shaders/rt_pipeline.slang`: pipeline module and short table of contents that `__include`s the
+  remaining shader files.
+- `shaders/hit.slang`: included primary and shadow closest-hit stages.
+- `shaders/miss.slang`: included primary and shadow miss stages.
+- `shaders/program_layout.slang`: included structural SBT declaration with sparse slots 1 and 4.
+- `shaders/raygen.slang`: included ray-generation entry point and direct-lighting orchestration.
 - `scene.h`: shared Cornell-box geometry and surface data.
 - `demo-window.h`: shared GLFW window, input, and native-window access.
 - `rhi-main.cpp`: interactive slang-rhi/Vulkan host with a headless mode.
