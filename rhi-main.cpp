@@ -22,6 +22,79 @@ using namespace rhi;
 namespace
 {
 
+enum class Backend
+{
+    Vulkan,
+    D3D12,
+    OptiX,
+};
+
+const char* getBackendName(Backend backend)
+{
+    switch (backend)
+    {
+    case Backend::Vulkan:
+        return "Vulkan";
+    case Backend::D3D12:
+        return "D3D12";
+    case Backend::OptiX:
+        return "OptiX";
+    }
+    return "unknown";
+}
+
+DeviceType getDeviceType(Backend backend)
+{
+    switch (backend)
+    {
+    case Backend::Vulkan:
+        return DeviceType::Vulkan;
+    case Backend::D3D12:
+        return DeviceType::D3D12;
+    case Backend::OptiX:
+        return DeviceType::CUDA;
+    }
+    return DeviceType::Default;
+}
+
+Backend parseBackend(const char* name)
+{
+    if (std::strcmp(name, "vulkan") == 0)
+        return Backend::Vulkan;
+    if (std::strcmp(name, "d3d12") == 0)
+        return Backend::D3D12;
+    if (std::strcmp(name, "optix") == 0)
+        return Backend::OptiX;
+    throw std::runtime_error(std::string("unknown backend: ") + name);
+}
+
+const char* getDefaultOutputPath(Backend backend)
+{
+    switch (backend)
+    {
+    case Backend::Vulkan:
+        return "cornell-box-vulkan.ppm";
+    case Backend::D3D12:
+        return "cornell-box-d3d12.ppm";
+    case Backend::OptiX:
+        return "cornell-box-optix.ppm";
+    }
+    return "cornell-box.ppm";
+}
+
+class DebugPrinter : public IDebugCallback
+{
+public:
+    void SLANG_MCALL
+    handleMessage(DebugMessageType type, DebugMessageSource, const char* message) override
+    {
+        const char* severity = type == DebugMessageType::Error     ? "error"
+                               : type == DebugMessageType::Warning ? "warning"
+                                                                   : "info";
+        std::fprintf(stderr, "slang-rhi %s: %s\n", severity, message);
+    }
+};
+
 void check(Result result, const char* operation)
 {
     if (SLANG_FAILED(result))
@@ -202,7 +275,7 @@ LoadedProgram loadProgram(IDevice* device)
         SlangStage stage;
     };
     std::vector<Entry> entries = {
-        {"main", SLANG_STAGE_RAY_GENERATION},
+        {"RayGeneration", SLANG_STAGE_RAY_GENERATION},
     };
     const auto addStage = [&](const std::string& name, SlangStage stage)
     {
@@ -307,7 +380,7 @@ ComPtr<IShaderTable> createShaderTable(
     IShaderProgram* program,
     const ReflectedProgramLayout& layout)
 {
-    static const char* kRayGeneration[] = {"main"};
+    static const char* kRayGeneration[] = {"RayGeneration"};
     // Reflection indexes these arrays by the declared logical slot. Empty strings
     // intentionally create zeroed, unreachable native SBT records for sparse
     // slots.
@@ -378,29 +451,53 @@ struct RenderResources
     ReflectedProgramLayout programLayout;
 };
 
-RenderResources createRenderer(const char* shaderDirectory, const char* reflectionOutput)
+RenderResources createRenderer(
+    const char* shaderDirectory,
+    const char* reflectionOutput,
+    Backend backend,
+    const char* optixIncludeDirectory)
 {
     const char* searchPaths[] = {shaderDirectory};
-    slang::CompilerOptionEntry options[2] = {};
-    options[0].name = slang::CompilerOptionName::EmitSpirvDirectly;
-    options[0].value.kind = slang::CompilerOptionValueKind::Int;
-    options[0].value.intValue0 = 1;
-    options[1].name = slang::CompilerOptionName::ExperimentalFeature;
-    options[1].value.kind = slang::CompilerOptionValueKind::Int;
-    options[1].value.intValue0 = 1;
+    slang::CompilerOptionEntry options[3] = {};
+    std::string nvrtcIncludeArgument;
+    uint32_t optionCount = 0;
+    options[optionCount].name = slang::CompilerOptionName::ExperimentalFeature;
+    options[optionCount].value.kind = slang::CompilerOptionValueKind::Int;
+    options[optionCount++].value.intValue0 = 1;
+    if (backend == Backend::Vulkan)
+    {
+        options[optionCount].name = slang::CompilerOptionName::EmitSpirvDirectly;
+        options[optionCount].value.kind = slang::CompilerOptionValueKind::Int;
+        options[optionCount++].value.intValue0 = 1;
+    }
+    if (backend == Backend::OptiX && optixIncludeDirectory)
+    {
+        // Slang invokes NVRTC after generating CUDA source. DownstreamArgs forwards the OptiX
+        // include directory to that compilation; Slang search paths apply only to Slang modules.
+        nvrtcIncludeArgument = std::string("-I") + optixIncludeDirectory + "\n";
+        options[optionCount].name = slang::CompilerOptionName::DownstreamArgs;
+        options[optionCount].value.kind = slang::CompilerOptionValueKind::String;
+        options[optionCount].value.stringValue0 = "nvrtc";
+        options[optionCount++].value.stringValue1 = nvrtcIncludeArgument.c_str();
+    }
 
     DeviceDesc deviceDesc = {};
-    deviceDesc.deviceType = DeviceType::Vulkan;
+    deviceDesc.deviceType = getDeviceType(backend);
     deviceDesc.slang.searchPaths = searchPaths;
     deviceDesc.slang.searchPathCount = 1;
     deviceDesc.slang.compilerOptionEntries = options;
-    deviceDesc.slang.compilerOptionEntryCount = 2;
+    deviceDesc.slang.compilerOptionEntryCount = optionCount;
     deviceDesc.enableValidation = true;
+    static DebugPrinter debugPrinter;
+    deviceDesc.debugCallback = &debugPrinter;
 
     RenderResources renderer;
-    check(getRHI()->createDevice(deviceDesc, renderer.device.writeRef()), "create Vulkan device");
+    const auto createDeviceResult = getRHI()->createDevice(deviceDesc, renderer.device.writeRef());
+    if (SLANG_FAILED(createDeviceResult))
+        throw std::runtime_error(std::string("create ") + getBackendName(backend) + " device");
     if (!renderer.device->hasFeature(Feature::RayTracing))
-        throw std::runtime_error("the Vulkan device does not support ray tracing");
+        throw std::runtime_error(
+            std::string("the ") + getBackendName(backend) + " device does not support ray tracing");
 
     renderer.queue = renderer.device->getQueue(QueueType::Graphics);
     if (!renderer.queue)
@@ -475,9 +572,15 @@ void renderFrame(
     check(renderer.queue->submit(commandEncoder->finish()), "submit ray tracing");
 }
 
-int runHeadless(const char* shaderDirectory, const char* outputPath, const char* reflectionOutput)
+int runHeadless(
+    const char* shaderDirectory,
+    const char* outputPath,
+    const char* reflectionOutput,
+    Backend backend,
+    const char* optixIncludeDirectory)
 {
-    auto renderer = createRenderer(shaderDirectory, reflectionOutput);
+    auto renderer =
+        createRenderer(shaderDirectory, reflectionOutput, backend, optixIncludeDirectory);
     const uint32_t width = cornell::kImageWidth;
     const uint32_t height = cornell::kImageHeight;
     const Size outputSize = Size(width) * height * sizeof(uint32_t);
@@ -493,9 +596,10 @@ int runHeadless(const char* shaderDirectory, const char* outputPath, const char*
     auto pixels = static_cast<const uint32_t*>(image->getBufferPointer());
     writePpm(outputPath, pixels, width, height);
     std::printf(
-        "rendered %ux%u Cornell box to %s (checksum %016llx)\n",
+        "rendered %ux%u Cornell box with %s to %s (checksum %016llx)\n",
         width,
         height,
+        getBackendName(backend),
         outputPath,
         static_cast<unsigned long long>(imageChecksum(pixels, width, height)));
     return 0;
@@ -504,10 +608,13 @@ int runHeadless(const char* shaderDirectory, const char* outputPath, const char*
 int runInteractive(
     const char* shaderDirectory,
     uint32_t maximumFrames,
-    const char* reflectionOutput)
+    const char* reflectionOutput,
+    Backend backend,
+    const char* optixIncludeDirectory)
 {
     DemoWindow window("Structural ray-tracing Cornell box", 960, 720);
-    auto renderer = createRenderer(shaderDirectory, reflectionOutput);
+    auto renderer =
+        createRenderer(shaderDirectory, reflectionOutput, backend, optixIncludeDirectory);
 #if defined(_WIN32)
     const auto windowHandle = WindowHandle::fromHwnd(window.nativeWindow());
 #elif defined(__APPLE__)
@@ -518,7 +625,8 @@ int runInteractive(
 #endif
     auto surface = renderer.device->createSurface(windowHandle);
     if (!surface)
-        throw std::runtime_error("create Vulkan window surface");
+        throw std::runtime_error(
+            std::string("create ") + getBackendName(backend) + " window surface");
 
     const Format format = surface->getInfo().preferredFormat;
     const bool bgra = format == Format::BGRA8Unorm || format == Format::BGRA8UnormSrgb;
@@ -564,7 +672,7 @@ int runInteractive(
             config.width = configuredWidth;
             config.height = configuredHeight;
             config.vsync = true;
-            check(surface->configure(config), "configure Vulkan window surface");
+            check(surface->configure(config), "configure window surface");
             rowPitch = (Size(configuredWidth) * sizeof(uint32_t) + rowAlignment - 1) /
                        rowAlignment * rowAlignment;
             output = createOutputBuffer(renderer.device, rowPitch * configuredHeight);
@@ -579,11 +687,11 @@ int runInteractive(
             camera.makeFrame(configuredWidth, configuredHeight, uint32_t(rowPitch / 4), bgra),
             target,
             rowPitch);
-        check(surface->present(), "present Vulkan frame");
+        check(surface->present(), "present frame");
         if (maximumFrames != 0 && ++frameCount >= maximumFrames)
             break;
     }
-    check(renderer.queue->waitOnHost(), "wait for final Vulkan frame");
+    check(renderer.queue->waitOnHost(), "wait for final frame");
     return 0;
 }
 
@@ -596,23 +704,41 @@ int main(int argc, char** argv)
         const char* shaderDirectory = argc > 1 ? argv[1] : ".";
         bool headless = false;
         uint32_t maximumFrames = 0;
-        const char* outputPath = "cornell-box-vulkan.ppm";
+        const char* outputPath = nullptr;
         const char* reflectionOutput = nullptr;
+        const char* optixIncludeDirectory = nullptr;
+        Backend backend = Backend::Vulkan;
         for (int i = 2; i < argc; ++i)
         {
             if (std::strcmp(argv[i], "--headless") == 0)
                 headless = true;
+            else if (std::strcmp(argv[i], "--backend") == 0 && i + 1 < argc)
+                backend = parseBackend(argv[++i]);
             else if (std::strcmp(argv[i], "--output") == 0 && i + 1 < argc)
                 outputPath = argv[++i];
             else if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc)
                 maximumFrames = uint32_t(std::stoul(argv[++i]));
             else if (std::strcmp(argv[i], "--reflection-output") == 0 && i + 1 < argc)
                 reflectionOutput = argv[++i];
+            else if (std::strcmp(argv[i], "--optix-include") == 0 && i + 1 < argc)
+                optixIncludeDirectory = argv[++i];
             else
                 throw std::runtime_error(std::string("unknown argument: ") + argv[i]);
         }
-        return headless ? runHeadless(shaderDirectory, outputPath, reflectionOutput)
-                        : runInteractive(shaderDirectory, maximumFrames, reflectionOutput);
+        if (!outputPath)
+            outputPath = getDefaultOutputPath(backend);
+        return headless ? runHeadless(
+                              shaderDirectory,
+                              outputPath,
+                              reflectionOutput,
+                              backend,
+                              optixIncludeDirectory)
+                        : runInteractive(
+                              shaderDirectory,
+                              maximumFrames,
+                              reflectionOutput,
+                              backend,
+                              optixIncludeDirectory);
     }
     catch (const std::exception& error)
     {

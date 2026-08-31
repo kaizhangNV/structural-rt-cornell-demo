@@ -1,5 +1,8 @@
 #pragma once
 
+#if defined(_WIN32) && !defined(NOMINMAX)
+#define NOMINMAX
+#endif
 #define GLFW_INCLUDE_NONE
 #if defined(__APPLE__)
 #define GLFW_EXPOSE_NATIVE_COCOA

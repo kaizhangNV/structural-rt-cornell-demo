@@ -250,7 +250,7 @@ struct KernelContext_0
 
 
 #line 17 "shaders/raygen.slang"
-[[kernel]] void main_0(uint3 dispatchRaysIndex_0 [[thread_position_in_grid]], metal::raytracing::acceleration_structure<metal::raytracing::instancing> scene_1 [[buffer(2)]], rt_TraceProgramDescriptorResources_default_0 constant* program_resources_1 [[buffer(3)]], Surface_natural_0 device* surfaces_1 [[buffer(1)]], uint device* output_1 [[buffer(4)]], GlobalParams_0 constant* globalParams_1 [[buffer(0)]])
+[[kernel]] void RayGeneration(uint3 dispatchRaysIndex_0 [[thread_position_in_grid]], metal::raytracing::acceleration_structure<metal::raytracing::instancing> scene_1 [[buffer(2)]], rt_TraceProgramDescriptorResources_default_0 constant* program_resources_1 [[buffer(3)]], Surface_natural_0 device* surfaces_1 [[buffer(1)]], uint device* output_1 [[buffer(4)]], GlobalParams_0 constant* globalParams_1 [[buffer(0)]])
 {
 
 #line 17

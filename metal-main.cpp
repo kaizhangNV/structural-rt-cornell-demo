@@ -194,7 +194,7 @@ MetalProgram createProgram(
     if (!library)
         throw std::runtime_error("compile generated Metal source: " + errorMessage(error));
 
-    auto kernel = loadFunction(library, "main_0");
+    auto kernel = loadFunction(library, "RayGeneration");
     std::vector<MTL::Function*> missFunctions(layout.missGroups.size());
     std::vector<MTL::Function*> closestHitFunctions(layout.hitGroups.size());
     std::vector<const NS::Object*> linkedFunctionObjects;

@@ -25,7 +25,7 @@ CMAKE_BUILD_PARALLEL_LEVEL=8 cmake --build "$demo_root/build/glfw" --parallel 8
     "$slang_build/$config/bin/slangc" \
         shaders/rt_pipeline.slang \
         -experimental-feature \
-        -entry main \
+        -entry RayGeneration \
         -stage raygeneration \
         -target metal \
         -o generated/cornell-box.metal
@@ -62,4 +62,5 @@ LD_LIBRARY_PATH="$slang_build/$config/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" 
     "$demo_root/build/structural-rt-cornell-rhi" \
     "$demo_root/shaders" \
     --reflection-output "$demo_root/generated/program-layout.txt" \
+    --optix-include "$slang_repo/external/optix-dev/include" \
     "$@"

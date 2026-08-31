@@ -14,7 +14,7 @@ uint packColor(float3 linearColor, bool bgra)
 }
 
 [shader("raygeneration")]
-void main()
+void RayGeneration()
 {
     uint2 pixel = DispatchRaysIndex().xy;
     if (pixel.x >= frame.imageSize.x || pixel.y >= frame.imageSize.y)
