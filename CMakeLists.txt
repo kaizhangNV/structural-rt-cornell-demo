@@ -42,8 +42,17 @@ add_executable(structural-rt-cornell-rhi rhi-main.cpp)
 target_compile_features(structural-rt-cornell-rhi PRIVATE cxx_std_17)
 target_link_libraries(structural-rt-cornell-rhi PRIVATE glfw slang-rhi)
 
+add_executable(slang-compile-benchmark perf/slang-compile-benchmark.cpp)
+target_compile_features(slang-compile-benchmark PRIVATE cxx_std_17)
+target_link_libraries(slang-compile-benchmark PRIVATE slang)
+
 set_target_properties(
     structural-rt-cornell-rhi
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/$<CONFIG>"
+)
+set_target_properties(
+    slang-compile-benchmark
     PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/$<CONFIG>"
 )

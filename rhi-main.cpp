@@ -7,6 +7,8 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <iomanip>
+#include <numeric>
 #include <slang-com-ptr.h>
 #include <slang-rhi.h>
 #include <slang-rhi/acceleration-structure-utils.h>
@@ -28,6 +30,26 @@ enum class Backend
     D3D12,
     OptiX,
 };
+
+enum class RayTracingApi
+{
+    Structural,
+    Legacy,
+};
+
+const char* getApiName(RayTracingApi api)
+{
+    return api == RayTracingApi::Structural ? "structural" : "legacy";
+}
+
+RayTracingApi parseApi(const char* name)
+{
+    if (std::strcmp(name, "structural") == 0)
+        return RayTracingApi::Structural;
+    if (std::strcmp(name, "legacy") == 0)
+        return RayTracingApi::Legacy;
+    throw std::runtime_error(std::string("unknown ray-tracing API: ") + name);
+}
 
 const char* getBackendName(Backend backend)
 {
@@ -258,7 +280,29 @@ struct LoadedProgram
     ReflectedProgramLayout layout;
 };
 
-LoadedProgram loadProgram(IDevice* device)
+ReflectedProgramLayout getLegacyProgramLayout()
+{
+    ReflectedProgramLayout layout;
+    placeReflectedGroup(
+        layout.hitGroups,
+        1,
+        ReflectedHitGroup{1, "PrimaryHitGroup", "PrimaryClosestHit", "", ""});
+    placeReflectedGroup(
+        layout.hitGroups,
+        4,
+        ReflectedHitGroup{4, "ShadowHitGroup", "ShadowClosestHit", "", ""});
+    placeReflectedGroup(
+        layout.missGroups,
+        1,
+        ReflectedMissGroup{1, "PrimaryMissGroup", "PrimaryMiss"});
+    placeReflectedGroup(
+        layout.missGroups,
+        4,
+        ReflectedMissGroup{4, "ShadowMissGroup", "ShadowMiss"});
+    return layout;
+}
+
+LoadedProgram loadProgram(IDevice* device, RayTracingApi api)
 {
     auto session = device->getSlangSession();
     ComPtr<slang::IBlob> diagnostics;
@@ -267,7 +311,9 @@ LoadedProgram loadProgram(IDevice* device)
     if (!module)
         throw std::runtime_error("load shaders/rt_pipeline.slang");
 
-    const auto reflectedLayout = reflectProgramLayout(module->getLayout(), "ProgramLayout");
+    const auto reflectedLayout = api == RayTracingApi::Structural
+                                     ? reflectProgramLayout(module->getLayout(), "ProgramLayout")
+                                     : getLegacyProgramLayout();
 
     struct Entry
     {
@@ -455,15 +501,19 @@ RenderResources createRenderer(
     const char* shaderDirectory,
     const char* reflectionOutput,
     Backend backend,
-    const char* optixIncludeDirectory)
+    const char* optixIncludeDirectory,
+    RayTracingApi api)
 {
     const char* searchPaths[] = {shaderDirectory};
     slang::CompilerOptionEntry options[3] = {};
     std::string nvrtcIncludeArgument;
     uint32_t optionCount = 0;
-    options[optionCount].name = slang::CompilerOptionName::ExperimentalFeature;
-    options[optionCount].value.kind = slang::CompilerOptionValueKind::Int;
-    options[optionCount++].value.intValue0 = 1;
+    if (api == RayTracingApi::Structural)
+    {
+        options[optionCount].name = slang::CompilerOptionName::ExperimentalFeature;
+        options[optionCount].value.kind = slang::CompilerOptionValueKind::Int;
+        options[optionCount++].value.intValue0 = 1;
+    }
     if (backend == Backend::Vulkan)
     {
         options[optionCount].name = slang::CompilerOptionName::EmitSpirvDirectly;
@@ -505,7 +555,7 @@ RenderResources createRenderer(
 
     auto sceneData = cornell::makeScene();
     renderer.scene = buildScene(renderer.device, renderer.queue, sceneData);
-    auto loadedProgram = loadProgram(renderer.device);
+    auto loadedProgram = loadProgram(renderer.device, api);
     renderer.program = loadedProgram.shaderProgram;
     renderer.programLayout = std::move(loadedProgram.layout);
     if (reflectionOutput)
@@ -577,10 +627,11 @@ int runHeadless(
     const char* outputPath,
     const char* reflectionOutput,
     Backend backend,
-    const char* optixIncludeDirectory)
+    const char* optixIncludeDirectory,
+    RayTracingApi api)
 {
     auto renderer =
-        createRenderer(shaderDirectory, reflectionOutput, backend, optixIncludeDirectory);
+        createRenderer(shaderDirectory, reflectionOutput, backend, optixIncludeDirectory, api);
     const uint32_t width = cornell::kImageWidth;
     const uint32_t height = cornell::kImageHeight;
     const Size outputSize = Size(width) * height * sizeof(uint32_t);
@@ -596,12 +647,166 @@ int runHeadless(
     auto pixels = static_cast<const uint32_t*>(image->getBufferPointer());
     writePpm(outputPath, pixels, width, height);
     std::printf(
-        "rendered %ux%u Cornell box with %s to %s (checksum %016llx)\n",
+        "rendered %ux%u Cornell box with %s/%s to %s (checksum %016llx)\n",
         width,
         height,
         getBackendName(backend),
+        getApiName(api),
         outputPath,
         static_cast<unsigned long long>(imageChecksum(pixels, width, height)));
+    return 0;
+}
+
+struct SampleSummary
+{
+    double median = 0.0;
+    double mean = 0.0;
+    double minimum = 0.0;
+    double maximum = 0.0;
+    double p95 = 0.0;
+};
+
+SampleSummary summarizeSamples(const std::vector<double>& samples)
+{
+    if (samples.empty())
+        throw std::runtime_error("cannot summarize an empty sample set");
+    auto sorted = samples;
+    std::sort(sorted.begin(), sorted.end());
+    const auto percentile = [&](double fraction)
+    {
+        const size_t index =
+            std::min(sorted.size() - 1, size_t(fraction * double(sorted.size() - 1) + 0.5));
+        return sorted[index];
+    };
+    SampleSummary result;
+    result.median = sorted.size() % 2 == 0
+                        ? (sorted[sorted.size() / 2 - 1] + sorted[sorted.size() / 2]) * 0.5
+                        : sorted[sorted.size() / 2];
+    result.mean = std::accumulate(samples.begin(), samples.end(), 0.0) / samples.size();
+    result.minimum = sorted.front();
+    result.maximum = sorted.back();
+    result.p95 = percentile(0.95);
+    return result;
+}
+
+std::string jsonEscape(const char* value)
+{
+    std::string result;
+    for (const char* cursor = value; *cursor; ++cursor)
+    {
+        if (*cursor == '\\' || *cursor == '"')
+            result.push_back('\\');
+        result.push_back(*cursor);
+    }
+    return result;
+}
+
+void writeRuntimeBenchmark(
+    const char* path,
+    Backend backend,
+    RayTracingApi api,
+    uint32_t warmupCount,
+    const std::vector<double>& samples,
+    IDevice* device)
+{
+    const auto summary = summarizeSamples(samples);
+    std::ofstream stream(path);
+    if (!stream)
+        throw std::runtime_error(std::string("write benchmark output: ") + path);
+    stream << std::fixed << std::setprecision(9);
+    stream << "{\n"
+           << "  \"schema\": \"slang-ray-tracing-perf-v1\",\n"
+           << "  \"kind\": \"runtime\",\n"
+           << "  \"backend\": \"" << getBackendName(backend) << "\",\n"
+           << "  \"implementation\": \"" << getApiName(api) << "\",\n"
+           << "  \"device\": \"" << jsonEscape(device->getInfo().adapterName) << "\",\n"
+           << "  \"metric\": \"GPU timestamp duration around one dispatch\",\n"
+           << "  \"unit\": \"ms\",\n"
+           << "  \"width\": " << cornell::kImageWidth << ",\n"
+           << "  \"height\": " << cornell::kImageHeight << ",\n"
+           << "  \"warmup_count\": " << warmupCount << ",\n"
+           << "  \"sample_count\": " << samples.size() << ",\n"
+           << "  \"summary\": {\"median\": " << summary.median << ", \"mean\": " << summary.mean
+           << ", \"min\": " << summary.minimum << ", \"max\": " << summary.maximum
+           << ", \"p95\": " << summary.p95 << "},\n  \"samples\": [";
+    for (size_t i = 0; i < samples.size(); ++i)
+        stream << (i == 0 ? "" : ", ") << samples[i];
+    stream << "]\n}\n";
+}
+
+int runBenchmark(
+    const char* shaderDirectory,
+    const char* benchmarkOutput,
+    Backend backend,
+    const char* optixIncludeDirectory,
+    RayTracingApi api,
+    uint32_t warmupCount,
+    uint32_t iterationCount)
+{
+    if (!benchmarkOutput)
+        throw std::runtime_error("--benchmark-output is required with --benchmark");
+    if (iterationCount == 0)
+        throw std::runtime_error("--iterations must be greater than zero");
+
+    auto renderer = createRenderer(shaderDirectory, nullptr, backend, optixIncludeDirectory, api);
+    if (!renderer.device->hasFeature(Feature::TimestampQuery) ||
+        renderer.device->getInfo().timestampFrequency == 0)
+        throw std::runtime_error("the selected device does not support timestamp queries");
+
+    const Size outputSize = Size(cornell::kImageWidth) * cornell::kImageHeight * sizeof(uint32_t);
+    auto output = createOutputBuffer(renderer.device, outputSize);
+    cornell::Camera camera;
+    const auto frame =
+        camera.makeFrame(cornell::kImageWidth, cornell::kImageHeight, cornell::kImageWidth, false);
+    for (uint32_t i = 0; i < warmupCount; ++i)
+        renderFrame(renderer, output, frame, nullptr, 0);
+    check(renderer.queue->waitOnHost(), "wait for benchmark warmup");
+
+    QueryPoolDesc queryDesc = {};
+    queryDesc.type = QueryType::Timestamp;
+    queryDesc.count = iterationCount * 2;
+    queryDesc.label = "Cornell box dispatch benchmark";
+    ComPtr<IQueryPool> queryPool;
+    check(
+        renderer.device->createQueryPool(queryDesc, queryPool.writeRef()),
+        "create timestamp query pool");
+
+    auto commandEncoder = renderer.queue->createCommandEncoder();
+    auto pass = commandEncoder->beginRayTracingPass();
+    auto rootObject = pass->bindPipeline(renderer.pipeline, renderer.shaderTable);
+    ShaderCursor root(rootObject);
+    check(root["scene"].setBinding(Binding(renderer.scene.topLevel)), "bind scene");
+    check(root["surfaces"].setBinding(Binding(renderer.surfaces)), "bind surfaces");
+    check(root["output"].setBinding(Binding(output)), "bind output");
+    check(root["frame"].setData(frame), "set frame data");
+    for (uint32_t i = 0; i < iterationCount; ++i)
+    {
+        pass->writeTimestamp(queryPool, i * 2);
+        pass->dispatchRays(0, cornell::kImageWidth, cornell::kImageHeight, 1);
+        pass->writeTimestamp(queryPool, i * 2 + 1);
+    }
+    pass->end();
+    check(renderer.queue->submit(commandEncoder->finish()), "submit benchmark dispatches");
+
+    std::vector<uint64_t> timestamps(iterationCount * 2);
+    check(
+        queryPool->getResult(0, uint32_t(timestamps.size()), timestamps.data()),
+        "read timestamp queries");
+    const double ticksPerMillisecond =
+        double(renderer.device->getInfo().timestampFrequency) / 1000.0;
+    std::vector<double> samples(iterationCount);
+    for (uint32_t i = 0; i < iterationCount; ++i)
+        samples[i] = double(timestamps[i * 2 + 1] - timestamps[i * 2]) / ticksPerMillisecond;
+
+    writeRuntimeBenchmark(benchmarkOutput, backend, api, warmupCount, samples, renderer.device);
+    const auto summary = summarizeSamples(samples);
+    std::printf(
+        "%s/%s GPU dispatch: median %.6f ms, p95 %.6f ms (%u samples)\n",
+        getBackendName(backend),
+        getApiName(api),
+        summary.median,
+        summary.p95,
+        iterationCount);
     return 0;
 }
 
@@ -610,11 +815,12 @@ int runInteractive(
     uint32_t maximumFrames,
     const char* reflectionOutput,
     Backend backend,
-    const char* optixIncludeDirectory)
+    const char* optixIncludeDirectory,
+    RayTracingApi api)
 {
     DemoWindow window("Structural ray-tracing Cornell box", 960, 720);
     auto renderer =
-        createRenderer(shaderDirectory, reflectionOutput, backend, optixIncludeDirectory);
+        createRenderer(shaderDirectory, reflectionOutput, backend, optixIncludeDirectory, api);
 #if defined(_WIN32)
     const auto windowHandle = WindowHandle::fromHwnd(window.nativeWindow());
 #elif defined(__APPLE__)
@@ -703,21 +909,36 @@ int main(int argc, char** argv)
     {
         const char* shaderDirectory = argc > 1 ? argv[1] : ".";
         bool headless = false;
+        bool benchmark = false;
         uint32_t maximumFrames = 0;
+        uint32_t warmupCount = 10;
+        uint32_t iterationCount = 100;
         const char* outputPath = nullptr;
+        const char* benchmarkOutput = nullptr;
         const char* reflectionOutput = nullptr;
         const char* optixIncludeDirectory = nullptr;
         Backend backend = Backend::Vulkan;
+        RayTracingApi api = RayTracingApi::Structural;
         for (int i = 2; i < argc; ++i)
         {
             if (std::strcmp(argv[i], "--headless") == 0)
                 headless = true;
+            else if (std::strcmp(argv[i], "--benchmark") == 0)
+                benchmark = true;
             else if (std::strcmp(argv[i], "--backend") == 0 && i + 1 < argc)
                 backend = parseBackend(argv[++i]);
+            else if (std::strcmp(argv[i], "--api") == 0 && i + 1 < argc)
+                api = parseApi(argv[++i]);
             else if (std::strcmp(argv[i], "--output") == 0 && i + 1 < argc)
                 outputPath = argv[++i];
             else if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc)
                 maximumFrames = uint32_t(std::stoul(argv[++i]));
+            else if (std::strcmp(argv[i], "--warmup") == 0 && i + 1 < argc)
+                warmupCount = uint32_t(std::stoul(argv[++i]));
+            else if (std::strcmp(argv[i], "--iterations") == 0 && i + 1 < argc)
+                iterationCount = uint32_t(std::stoul(argv[++i]));
+            else if (std::strcmp(argv[i], "--benchmark-output") == 0 && i + 1 < argc)
+                benchmarkOutput = argv[++i];
             else if (std::strcmp(argv[i], "--reflection-output") == 0 && i + 1 < argc)
                 reflectionOutput = argv[++i];
             else if (std::strcmp(argv[i], "--optix-include") == 0 && i + 1 < argc)
@@ -727,18 +948,29 @@ int main(int argc, char** argv)
         }
         if (!outputPath)
             outputPath = getDefaultOutputPath(backend);
+        if (benchmark)
+            return runBenchmark(
+                shaderDirectory,
+                benchmarkOutput,
+                backend,
+                optixIncludeDirectory,
+                api,
+                warmupCount,
+                iterationCount);
         return headless ? runHeadless(
                               shaderDirectory,
                               outputPath,
                               reflectionOutput,
                               backend,
-                              optixIncludeDirectory)
+                              optixIncludeDirectory,
+                              api)
                         : runInteractive(
                               shaderDirectory,
                               maximumFrames,
                               reflectionOutput,
                               backend,
-                              optixIncludeDirectory);
+                              optixIncludeDirectory,
+                              api);
     }
     catch (const std::exception& error)
     {

@@ -16,8 +16,11 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <iomanip>
+#include <numeric>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace
 {
@@ -147,6 +150,7 @@ MTL::Function* loadFunction(MTL::Library* library, const char* name)
 
 struct MetalProgram
 {
+    bool native;
     MTL::Library* library;
     MTL::ComputePipelineState* pipeline;
     MTL::VisibleFunctionTable* missTable;
@@ -182,7 +186,8 @@ std::string getMetalFunctionName(const std::string& reflectedEntryPointName)
 MetalProgram createProgram(
     MTL::Device* device,
     const char* metalSourcePath,
-    const ReflectedProgramLayout& layout)
+    const ReflectedProgramLayout& layout,
+    bool native)
 {
     const auto source = readTextFile(metalSourcePath);
     auto sourceString = NS::String::string(source.c_str(), NS::UTF8StringEncoding);
@@ -195,6 +200,27 @@ MetalProgram createProgram(
         throw std::runtime_error("compile generated Metal source: " + errorMessage(error));
 
     auto kernel = loadFunction(library, "RayGeneration");
+    if (native)
+    {
+        auto pipelineDescriptor = MTL::ComputePipelineDescriptor::alloc()->init();
+        pipelineDescriptor->setComputeFunction(kernel);
+        auto pipeline = device->newComputePipelineState(
+            pipelineDescriptor,
+            MTL::PipelineOptionNone,
+            nullptr,
+            &error);
+        pipelineDescriptor->release();
+        kernel->release();
+        if (!pipeline)
+            throw std::runtime_error(
+                "create native Metal compute pipeline: " + errorMessage(error));
+        MetalProgram program = {};
+        program.native = true;
+        program.library = library;
+        program.pipeline = pipeline;
+        return program;
+    }
+
     std::vector<MTL::Function*> missFunctions(layout.missGroups.size());
     std::vector<MTL::Function*> closestHitFunctions(layout.hitGroups.size());
     std::vector<const NS::Object*> linkedFunctionObjects;
@@ -235,6 +261,7 @@ MetalProgram createProgram(
         throw std::runtime_error("create Metal compute pipeline: " + errorMessage(error));
 
     MetalProgram program = {};
+    program.native = false;
     program.library = library;
     program.pipeline = pipeline;
     program.missTable =
@@ -290,7 +317,7 @@ uint64_t imageChecksum(const uint32_t* pixels)
     return hash;
 }
 
-void dispatchFrame(
+double dispatchFrame(
     MTL::CommandQueue* queue,
     const MetalScene& scene,
     const MetalProgram& program,
@@ -308,14 +335,18 @@ void dispatchFrame(
     encoder->setBytes(&frame, sizeof(frame), 0);
     encoder->setBuffer(surfaces, 0, 1);
     encoder->setAccelerationStructure(scene.topLevel, 2);
-    encoder->setBuffer(programResourceBuffer, 0, 3);
+    if (!program.native)
+        encoder->setBuffer(programResourceBuffer, 0, 3);
     encoder->setBuffer(output, 0, 4);
     encoder->useResource(scene.topLevel, MTL::ResourceUsageRead);
-    encoder->useResource(program.intersectionTable, MTL::ResourceUsageRead);
-    encoder->useResource(program.missTable, MTL::ResourceUsageRead);
-    encoder->useResource(program.closestHitTable, MTL::ResourceUsageRead);
-    encoder->useResource(programResourceBuffer, MTL::ResourceUsageRead);
-    encoder->useResource(records, MTL::ResourceUsageRead);
+    if (!program.native)
+    {
+        encoder->useResource(program.intersectionTable, MTL::ResourceUsageRead);
+        encoder->useResource(program.missTable, MTL::ResourceUsageRead);
+        encoder->useResource(program.closestHitTable, MTL::ResourceUsageRead);
+        encoder->useResource(programResourceBuffer, MTL::ResourceUsageRead);
+        encoder->useResource(records, MTL::ResourceUsageRead);
+    }
     encoder->useResource(surfaces, MTL::ResourceUsageRead);
     encoder->useResource(output, MTL::ResourceUsageWrite);
     encoder->dispatchThreads(
@@ -341,6 +372,76 @@ void dispatchFrame(
     }
     commandBuffer->commit();
     checkCommandBuffer(commandBuffer, "dispatch Metal Cornell box");
+    return (commandBuffer->GPUEndTime() - commandBuffer->GPUStartTime()) * 1000.0;
+}
+
+struct SampleSummary
+{
+    double median;
+    double mean;
+    double minimum;
+    double maximum;
+    double p95;
+};
+
+SampleSummary summarizeSamples(const std::vector<double>& samples)
+{
+    auto sorted = samples;
+    std::sort(sorted.begin(), sorted.end());
+    const size_t p95Index =
+        std::min(sorted.size() - 1, size_t(0.95 * double(sorted.size() - 1) + 0.5));
+    return {
+        sorted.size() % 2 == 0 ? (sorted[sorted.size() / 2 - 1] + sorted[sorted.size() / 2]) * 0.5
+                               : sorted[sorted.size() / 2],
+        std::accumulate(samples.begin(), samples.end(), 0.0) / samples.size(),
+        sorted.front(),
+        sorted.back(),
+        sorted[p95Index],
+    };
+}
+
+std::string jsonEscape(const char* value)
+{
+    std::string result;
+    for (const char* cursor = value; *cursor; ++cursor)
+    {
+        if (*cursor == '\\' || *cursor == '"')
+            result.push_back('\\');
+        result.push_back(*cursor);
+    }
+    return result;
+}
+
+void writeRuntimeBenchmark(
+    const char* path,
+    bool native,
+    MTL::Device* device,
+    uint32_t warmupCount,
+    const std::vector<double>& samples)
+{
+    const auto summary = summarizeSamples(samples);
+    std::ofstream stream(path);
+    if (!stream)
+        throw std::runtime_error(std::string("write benchmark output: ") + path);
+    stream << std::fixed << std::setprecision(9);
+    stream << "{\n"
+           << "  \"schema\": \"slang-ray-tracing-perf-v1\",\n"
+           << "  \"kind\": \"runtime\",\n"
+           << "  \"backend\": \"Metal\",\n"
+           << "  \"implementation\": \"" << (native ? "native" : "structural") << "\",\n"
+           << "  \"device\": \"" << jsonEscape(device->name()->utf8String()) << "\",\n"
+           << "  \"metric\": \"MTLCommandBuffer GPUStartTime to GPUEndTime for one dispatch\",\n"
+           << "  \"unit\": \"ms\",\n"
+           << "  \"width\": " << cornell::kImageWidth << ",\n"
+           << "  \"height\": " << cornell::kImageHeight << ",\n"
+           << "  \"warmup_count\": " << warmupCount << ",\n"
+           << "  \"sample_count\": " << samples.size() << ",\n"
+           << "  \"summary\": {\"median\": " << summary.median << ", \"mean\": " << summary.mean
+           << ", \"min\": " << summary.minimum << ", \"max\": " << summary.maximum
+           << ", \"p95\": " << summary.p95 << "},\n  \"samples\": [";
+    for (size_t i = 0; i < samples.size(); ++i)
+        stream << (i == 0 ? "" : ", ") << samples[i];
+    stream << "]\n}\n";
 }
 
 int run(
@@ -348,7 +449,12 @@ int run(
     const char* programLayoutPath,
     const char* outputPath,
     bool headless,
-    uint32_t maximumFrames)
+    uint32_t maximumFrames,
+    bool native,
+    bool benchmark,
+    const char* benchmarkOutput,
+    uint32_t warmupCount,
+    uint32_t iterationCount)
 {
     auto pool = NS::AutoreleasePool::alloc()->init();
     auto device = MTL::CreateSystemDefaultDevice();
@@ -363,32 +469,41 @@ int run(
 
     auto sceneData = cornell::makeScene();
     auto scene = buildScene(device, queue, sceneData);
-    const auto reflectedLayout = readReflectedProgramLayout(programLayoutPath);
-    auto program = createProgram(device, metalSourcePath, reflectedLayout);
+    const auto reflectedLayout =
+        native ? ReflectedProgramLayout() : readReflectedProgramLayout(programLayoutPath);
+    auto program = createProgram(device, metalSourcePath, reflectedLayout, native);
 
     static const uint32_t kRecords[] = {1, 0};
-    auto records = device->newBuffer(kRecords, sizeof(kRecords), MTL::ResourceStorageModeShared);
+    auto records =
+        native ? nullptr
+               : device->newBuffer(kRecords, sizeof(kRecords), MTL::ResourceStorageModeShared);
     auto surfaces = device->newBuffer(
         sceneData.surfaces.data(),
         sceneData.surfaces.size() * sizeof(cornell::Surface),
         MTL::ResourceStorageModeShared);
-    if (!records || !surfaces)
+    if ((!native && !records) || !surfaces)
         throw std::runtime_error("create Metal shader buffers");
 
-    TraceProgramResources programResources = {
-        program.intersectionTable->gpuResourceID()._impl,
-        program.missTable->gpuResourceID()._impl,
-        program.closestHitTable->gpuResourceID()._impl,
-        records->gpuAddress(),
-        records->gpuAddress(),
-    };
-    auto programResourceBuffer = device->newBuffer(
-        &programResources,
-        sizeof(programResources),
-        MTL::ResourceStorageModeShared);
+    MTL::Buffer* programResourceBuffer = nullptr;
+    if (!native)
+    {
+        TraceProgramResources programResources = {
+            program.intersectionTable->gpuResourceID()._impl,
+            program.missTable->gpuResourceID()._impl,
+            program.closestHitTable->gpuResourceID()._impl,
+            records->gpuAddress(),
+            records->gpuAddress(),
+        };
+        programResourceBuffer = device->newBuffer(
+            &programResources,
+            sizeof(programResources),
+            MTL::ResourceStorageModeShared);
+        if (!programResourceBuffer)
+            throw std::runtime_error("create Metal trace-program resource buffer");
+    }
 
     MTL::Buffer* output = nullptr;
-    if (headless)
+    if (headless || benchmark)
     {
         output = device->newBuffer(
             cornell::kImageWidth * cornell::kImageHeight * sizeof(uint32_t),
@@ -396,29 +511,75 @@ int run(
         if (!output)
             throw std::runtime_error("create Metal output buffer");
         cornell::Camera camera;
-        dispatchFrame(
-            queue,
-            scene,
-            program,
-            programResourceBuffer,
-            records,
-            surfaces,
-            output,
-            camera.makeFrame(
-                cornell::kImageWidth,
-                cornell::kImageHeight,
-                cornell::kImageWidth,
-                false),
-            nullptr,
-            0);
-        auto pixels = static_cast<const uint32_t*>(output->contents());
-        writePpm(outputPath, pixels);
-        std::printf(
-            "rendered %ux%u Cornell box to %s (checksum %016llx)\n",
+        const auto frame = camera.makeFrame(
             cornell::kImageWidth,
             cornell::kImageHeight,
-            outputPath,
-            static_cast<unsigned long long>(imageChecksum(pixels)));
+            cornell::kImageWidth,
+            false);
+        if (benchmark)
+        {
+            if (!benchmarkOutput)
+                throw std::runtime_error("--benchmark-output is required with --benchmark");
+            if (iterationCount == 0)
+                throw std::runtime_error("--iterations must be greater than zero");
+            for (uint32_t i = 0; i < warmupCount; ++i)
+                dispatchFrame(
+                    queue,
+                    scene,
+                    program,
+                    programResourceBuffer,
+                    records,
+                    surfaces,
+                    output,
+                    frame,
+                    nullptr,
+                    0);
+            std::vector<double> samples;
+            samples.reserve(iterationCount);
+            for (uint32_t i = 0; i < iterationCount; ++i)
+                samples.push_back(dispatchFrame(
+                    queue,
+                    scene,
+                    program,
+                    programResourceBuffer,
+                    records,
+                    surfaces,
+                    output,
+                    frame,
+                    nullptr,
+                    0));
+            writeRuntimeBenchmark(benchmarkOutput, native, device, warmupCount, samples);
+            const auto summary = summarizeSamples(samples);
+            std::printf(
+                "Metal/%s GPU dispatch: median %.6f ms, p95 %.6f ms (%u samples)\n",
+                native ? "native" : "structural",
+                summary.median,
+                summary.p95,
+                iterationCount);
+        }
+        else
+        {
+            dispatchFrame(
+                queue,
+                scene,
+                program,
+                programResourceBuffer,
+                records,
+                surfaces,
+                output,
+                frame,
+                nullptr,
+                0);
+            auto pixels = static_cast<const uint32_t*>(output->contents());
+            writePpm(outputPath, pixels);
+            std::printf(
+                "rendered %ux%u Cornell box with Metal/%s to %s (checksum %016llx)\n",
+                cornell::kImageWidth,
+                cornell::kImageHeight,
+                native ? "native" : "structural",
+                outputPath,
+                static_cast<unsigned long long>(imageChecksum(pixels)));
+        }
     }
     else
     {
@@ -487,14 +648,19 @@ int run(
         }
     }
 
-    programResourceBuffer->release();
+    if (programResourceBuffer)
+        programResourceBuffer->release();
     if (output)
         output->release();
     surfaces->release();
-    records->release();
-    program.intersectionTable->release();
-    program.closestHitTable->release();
-    program.missTable->release();
+    if (records)
+        records->release();
+    if (program.intersectionTable)
+        program.intersectionTable->release();
+    if (program.closestHitTable)
+        program.closestHitTable->release();
+    if (program.missTable)
+        program.missTable->release();
     program.pipeline->release();
     program.library->release();
     scene.topLevel->release();
@@ -516,7 +682,8 @@ int main(int argc, char** argv)
         std::fprintf(
             stderr,
             "usage: %s <generated-metal-source> <reflected-layout> [--headless] "
-            "[--output output.ppm]\n",
+            "[--implementation structural|native] [--output output.ppm] "
+            "[--benchmark --benchmark-output result.json]\n",
             argv[0]);
         return 2;
     }
@@ -524,20 +691,52 @@ int main(int argc, char** argv)
     try
     {
         bool headless = false;
+        bool native = false;
+        bool benchmark = false;
         uint32_t maximumFrames = 0;
+        uint32_t warmupCount = 10;
+        uint32_t iterationCount = 100;
         const char* outputPath = "cornell-box-metal.ppm";
+        const char* benchmarkOutput = nullptr;
         for (int i = 3; i < argc; ++i)
         {
             if (std::strcmp(argv[i], "--headless") == 0)
                 headless = true;
+            else if (std::strcmp(argv[i], "--benchmark") == 0)
+                benchmark = true;
+            else if (std::strcmp(argv[i], "--implementation") == 0 && i + 1 < argc)
+            {
+                const char* implementation = argv[++i];
+                if (std::strcmp(implementation, "native") == 0)
+                    native = true;
+                else if (std::strcmp(implementation, "structural") != 0)
+                    throw std::runtime_error(
+                        std::string("unknown Metal implementation: ") + implementation);
+            }
             else if (std::strcmp(argv[i], "--output") == 0 && i + 1 < argc)
                 outputPath = argv[++i];
             else if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc)
                 maximumFrames = uint32_t(std::stoul(argv[++i]));
+            else if (std::strcmp(argv[i], "--warmup") == 0 && i + 1 < argc)
+                warmupCount = uint32_t(std::stoul(argv[++i]));
+            else if (std::strcmp(argv[i], "--iterations") == 0 && i + 1 < argc)
+                iterationCount = uint32_t(std::stoul(argv[++i]));
+            else if (std::strcmp(argv[i], "--benchmark-output") == 0 && i + 1 < argc)
+                benchmarkOutput = argv[++i];
             else
                 throw std::runtime_error(std::string("unknown argument: ") + argv[i]);
         }
-        return run(argv[1], argv[2], outputPath, headless, maximumFrames);
+        return run(
+            argv[1],
+            argv[2],
+            outputPath,
+            headless,
+            maximumFrames,
+            native,
+            benchmark,
+            benchmarkOutput,
+            warmupCount,
+            iterationCount);
     }
     catch (const std::exception& error)
     {

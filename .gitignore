@@ -1,4 +1,5 @@
 /build/
+/perf-results/
 /metal-cpp/
 /*.png
 /*.ppm

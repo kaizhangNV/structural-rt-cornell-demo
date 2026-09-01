@@ -4,6 +4,25 @@ set -euo pipefail
 
 demo_root="$(cd "$(dirname "$0")" && pwd)"
 metal_cpp_dir="${METAL_CPP_DIR:-$demo_root/metal-cpp}"
+export CMAKE_BUILD_PARALLEL_LEVEL=8
+export MAX_JOBS=8
+export MAKEFLAGS=-j8
+
+implementation="structural"
+for ((argument_index = 1; argument_index <= $#; ++argument_index)); do
+    if [[ "${!argument_index}" == "--implementation" ]]; then
+        value_index=$((argument_index + 1))
+        implementation="${!value_index}"
+    fi
+done
+if [[ "$implementation" != "structural" && "$implementation" != "native" ]]; then
+    echo "--implementation must be structural or native" >&2
+    exit 2
+fi
+metal_source="$demo_root/generated/cornell-box.metal"
+if [[ "$implementation" == "native" ]]; then
+    metal_source="$demo_root/shaders/cornell-box-native.metal"
+fi
 
 mkdir -p "$demo_root/build"
 
@@ -46,7 +65,17 @@ xcrun clang++ \
     -framework QuartzCore \
     -o "$demo_root/build/structural-rt-cornell-metal"
 
+xcrun clang++ \
+    -std=c++17 \
+    -O2 \
+    -fobjc-arc \
+    -I"$metal_cpp_dir" \
+    "$demo_root/perf/metal-compile-benchmark.cpp" \
+    -framework Foundation \
+    -framework Metal \
+    -o "$demo_root/build/metal-compile-benchmark"
+
 "$demo_root/build/structural-rt-cornell-metal" \
-    "$demo_root/generated/cornell-box.metal" \
+    "$metal_source" \
     "$demo_root/generated/program-layout.txt" \
     "$@"

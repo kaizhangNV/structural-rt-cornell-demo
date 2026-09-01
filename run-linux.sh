@@ -7,10 +7,32 @@ slang_repo="${SLANG_REPO:-$demo_root/../another-slang-rt-recovery}"
 slang_build="${SLANG_BUILD:-$slang_repo/build}"
 config="${SLANG_CONFIG:-Debug}"
 compiler="${CXX:-c++}"
+limited_build="${LIMITED_BUILD_WRAPPER:-$HOME/.codex/skills/limit-cpp-build-parallelism/scripts/run-limited-build.sh}"
+
+if [[ ! -x "$limited_build" ]]; then
+    echo "native build limiter is not executable: $limited_build" >&2
+    exit 2
+fi
+
+api="structural"
+for ((argument_index = 1; argument_index <= $#; ++argument_index)); do
+    if [[ "${!argument_index}" == "--api" ]]; then
+        value_index=$((argument_index + 1))
+        api="${!value_index}"
+    fi
+done
+if [[ "$api" != "structural" && "$api" != "legacy" ]]; then
+    echo "--api must be structural or legacy" >&2
+    exit 2
+fi
+shader_directory="$demo_root/shaders"
+if [[ "$api" == "legacy" ]]; then
+    shader_directory="$demo_root/shaders-legacy"
+fi
 
 mkdir -p "$demo_root/build" "$demo_root/generated"
 
-CMAKE_BUILD_PARALLEL_LEVEL=8 cmake \
+NATIVE_BUILD_JOBS=8 "$limited_build" cmake \
     -S "$demo_root/external/glfw" \
     -B "$demo_root/build/glfw" \
     -DGLFW_BUILD_DOCS=OFF \
@@ -18,7 +40,7 @@ CMAKE_BUILD_PARALLEL_LEVEL=8 cmake \
     -DGLFW_BUILD_TESTS=OFF \
     -DGLFW_BUILD_WAYLAND=OFF \
     -DGLFW_BUILD_X11=ON
-CMAKE_BUILD_PARALLEL_LEVEL=8 cmake --build "$demo_root/build/glfw" --parallel 8
+NATIVE_BUILD_JOBS=8 "$limited_build" cmake --build "$demo_root/build/glfw" --parallel 8
 
 (
     cd "$demo_root"
@@ -31,7 +53,7 @@ CMAKE_BUILD_PARALLEL_LEVEL=8 cmake --build "$demo_root/build/glfw" --parallel 8
         -o generated/cornell-box.metal
 )
 
-"$compiler" \
+NATIVE_BUILD_JOBS=8 "$limited_build" "$compiler" \
     -std=c++17 \
     -O2 \
     -I"$slang_repo/include" \
@@ -60,7 +82,7 @@ CMAKE_BUILD_PARALLEL_LEVEL=8 cmake --build "$demo_root/build/glfw" --parallel 8
 
 LD_LIBRARY_PATH="$slang_build/$config/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
     "$demo_root/build/structural-rt-cornell-rhi" \
-    "$demo_root/shaders" \
+    "$shader_directory" \
     --reflection-output "$demo_root/generated/program-layout.txt" \
     --optix-include "$slang_repo/external/optix-dev/include" \
     "$@"

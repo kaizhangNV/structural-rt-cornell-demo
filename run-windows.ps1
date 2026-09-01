@@ -4,7 +4,13 @@ param(
     [ValidateSet("Debug", "Release", "RelWithDebInfo")]
     [string] $Config = "Debug",
     [string] $Generator = "Visual Studio 17 2022",
+    [ValidateSet("structural", "legacy")]
+    [string] $Api = "structural",
     [switch] $Headless,
+    [switch] $Benchmark,
+    [string] $BenchmarkOutput = "",
+    [uint32] $Warmup = 10,
+    [uint32] $Iterations = 100,
     [string] $Output = "",
     [uint32] $Frames = 0
 )
@@ -34,18 +40,29 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
-& cmake.exe --build $BuildDir --config $Config --target structural-rt-cornell-rhi --parallel 8
+& cmake.exe --build $BuildDir --config $Config --target structural-rt-cornell-rhi slang-compile-benchmark --parallel 8
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
 $Arguments = @(
-    (Join-Path $PSScriptRoot "shaders"),
+    (Join-Path $PSScriptRoot $(if ($Api -eq "legacy") { "shaders-legacy" } else { "shaders" })),
     "--backend", "d3d12",
-    "--reflection-output", (Join-Path $PSScriptRoot "generated/program-layout.txt")
+    "--api", $Api
 )
+if ($Api -eq "structural") {
+    $Arguments += @("--reflection-output", (Join-Path $PSScriptRoot "generated/program-layout.txt"))
+}
 if ($Headless) {
     $Arguments += "--headless"
+}
+if ($Benchmark) {
+    $Arguments += @(
+        "--benchmark",
+        "--warmup", $Warmup,
+        "--iterations", $Iterations,
+        "--benchmark-output", $BenchmarkOutput
+    )
 }
 if ($Output) {
     $Arguments += @("--output", $Output)
