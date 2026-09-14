@@ -1,5 +1,5 @@
 param(
-    [string] $SlangRepo = (Join-Path $PSScriptRoot "../another-slang-rt-recovery"),
+    [string] $SlangRepo = (Join-Path $PSScriptRoot "../another-slang-rt-integration"),
     [string] $SlangBuild = "",
     [ValidateSet("Debug", "Release", "RelWithDebInfo")]
     [string] $Config = "Release",
@@ -64,35 +64,32 @@ $SlangVersion = (($SlangVersionLines | ForEach-Object { $_.ToString() }) | Out-S
 $SlangCommit = ((& git.exe -C $SlangRepo rev-parse --short=12 HEAD) | Out-String).Trim()
 $CommonCompilerArguments = @(
     "--target", "dxil",
-    "--output", (Join-Path $ResultsDir "compile-dxil.json"),
+    "--output", (Join-Path $ResultsDir "compile-dxil-structural.json"),
     "--compiler-label", "$SlangVersion; source $SlangCommit",
     "--host-label", $HostLabel,
     "--warmup", $Warmup,
     "--iterations", $Iterations,
-    "--case", "structural", (Join-Path $PSScriptRoot "shaders"), "rt_pipeline", "experimental",
-    "--case", "legacy", (Join-Path $PSScriptRoot "shaders-legacy"), "rt_pipeline", "standard",
+    "--case", "structural", (Join-Path $PSScriptRoot "shaders"), "rt_pipeline", "experimental", "ProgramSchema",
     "--entry", "RayGeneration", "raygeneration",
-    "--entry", "PrimaryClosestHit", "closesthit",
-    "--entry", "ShadowClosestHit", "closesthit",
-    "--entry", "PrimaryMiss", "miss",
-    "--entry", "ShadowMiss", "miss"
+    "--legacy-entry", "PrimaryClosestHit", "closesthit",
+    "--legacy-entry", "ShadowClosestHit", "closesthit",
+    "--legacy-entry", "PrimaryMiss", "miss",
+    "--legacy-entry", "ShadowMiss", "miss"
 )
 & $Compiler @CommonCompilerArguments
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-foreach ($Api in @("structural", "legacy")) {
-    & (Join-Path $PSScriptRoot "run-windows.ps1") `
-        -SlangRepo $SlangRepo `
-        -SlangBuild $SlangBuild `
-        -Config $Config `
-        -Generator $Generator `
-        -Api $Api `
-        -Benchmark `
-        -BenchmarkOutput (Join-Path $ResultsDir "runtime-d3d12-$Api.json") `
-        -Warmup $Warmup `
-        -Iterations $Iterations
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-}
+& (Join-Path $PSScriptRoot "run-windows.ps1") `
+    -SlangRepo $SlangRepo `
+    -SlangBuild $SlangBuild `
+    -Config $Config `
+    -Generator $Generator `
+    -Api structural `
+    -Benchmark `
+    -BenchmarkOutput (Join-Path $ResultsDir "runtime-d3d12-structural.json") `
+    -Warmup $Warmup `
+    -Iterations $Iterations
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Get-ChildItem $ResultsDir -Filter "*.json" | Sort-Object Name | ForEach-Object {
     Write-Output "PERF_RESULT_BEGIN $($_.Name)"

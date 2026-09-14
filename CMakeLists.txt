@@ -46,6 +46,10 @@ add_executable(slang-compile-benchmark perf/slang-compile-benchmark.cpp)
 target_compile_features(slang-compile-benchmark PRIVATE cxx_std_17)
 target_link_libraries(slang-compile-benchmark PRIVATE slang)
 
+add_executable(structural-rt-metal-artifact-generator metal-artifact-generator.cpp)
+target_compile_features(structural-rt-metal-artifact-generator PRIVATE cxx_std_17)
+target_link_libraries(structural-rt-metal-artifact-generator PRIVATE slang)
+
 set_target_properties(
     structural-rt-cornell-rhi
     PROPERTIES
@@ -53,6 +57,11 @@ set_target_properties(
 )
 set_target_properties(
     slang-compile-benchmark
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/$<CONFIG>"
+)
+set_target_properties(
+    structural-rt-metal-artifact-generator
     PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/$<CONFIG>"
 )

@@ -1,5 +1,5 @@
 #include "macos-metal-layer.h"
-#include "program-layout.h"
+#include "program-schema.h"
 #include "scene.h"
 
 #define CA_PRIVATE_IMPLEMENTATION
@@ -20,19 +20,11 @@
 #include <numeric>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace
 {
-
-struct TraceProgramResources
-{
-    uint64_t intersectionFunctions;
-    uint64_t missFunctions;
-    uint64_t closestHitFunctions;
-    uint64_t callableFunctions;
-    uint64_t records;
-};
 
 std::string errorMessage(NS::Error* error)
 {
@@ -148,14 +140,20 @@ MTL::Function* loadFunction(MTL::Library* library, const char* name)
     return function;
 }
 
+struct MetalPayloadProgram
+{
+    MTL::VisibleFunctionTable* missTable = nullptr;
+    MTL::VisibleFunctionTable* closestHitTable = nullptr;
+    MTL::IntersectionFunctionTable* intersectionTable = nullptr;
+};
+
 struct MetalProgram
 {
-    bool native;
-    MTL::Library* library;
-    MTL::ComputePipelineState* pipeline;
-    MTL::VisibleFunctionTable* missTable;
-    MTL::VisibleFunctionTable* closestHitTable;
-    MTL::IntersectionFunctionTable* intersectionTable;
+    bool native = false;
+    MTL::Library* library = nullptr;
+    MTL::ComputePipelineState* pipeline = nullptr;
+    std::vector<MetalPayloadProgram> payloads;
+    MTL::VisibleFunctionTable* callableTable = nullptr;
 };
 
 MTL::VisibleFunctionTable* createVisibleFunctionTable(
@@ -164,7 +162,7 @@ MTL::VisibleFunctionTable* createVisibleFunctionTable(
     uint32_t functionCount)
 {
     auto descriptor = MTL::VisibleFunctionTableDescriptor::alloc()->init();
-    descriptor->setFunctionCount(functionCount);
+    descriptor->setFunctionCount(std::max(functionCount, 1u));
     auto table = pipeline->newVisibleFunctionTable(descriptor);
     descriptor->release();
     if (!table)
@@ -178,18 +176,30 @@ MTL::VisibleFunctionTable* createVisibleFunctionTable(
     return table;
 }
 
-std::string getMetalFunctionName(const std::string& reflectedEntryPointName)
+MTL::Function* loadIntersectionFunction(
+    MTL::Library* library,
+    const std::string& name,
+    NS::Error** error)
 {
-    return reflectedEntryPointName + "_0";
+    auto descriptor = MTL::IntersectionFunctionDescriptor::alloc()->init();
+    descriptor->setName(NS::String::string(name.c_str(), NS::UTF8StringEncoding));
+    auto function = library->newIntersectionFunction(descriptor, error);
+    descriptor->release();
+    return function;
 }
 
 MetalProgram createProgram(
     MTL::Device* device,
     const char* metalSourcePath,
-    const ReflectedProgramLayout& layout,
+    const ReflectedProgramSchema& schema,
     bool native)
 {
     const auto source = readTextFile(metalSourcePath);
+    if (!native &&
+        (source.size() != schema.metalSourceByteCount ||
+         computeFnv1a64(source.data(), source.size()) != schema.metalSourceFnv1a64))
+        throw std::runtime_error(
+            "generated Metal source does not match its reflected schema manifest");
     auto sourceString = NS::String::string(source.c_str(), NS::UTF8StringEncoding);
     auto options = MTL::CompileOptions::alloc()->init();
     options->setLanguageVersion(MTL::LanguageVersion3_1);
@@ -221,28 +231,116 @@ MetalProgram createProgram(
         return program;
     }
 
-    std::vector<MTL::Function*> missFunctions(layout.missGroups.size());
-    std::vector<MTL::Function*> closestHitFunctions(layout.hitGroups.size());
+    struct PayloadFunctions
+    {
+        std::vector<MTL::Function*> miss;
+        std::vector<MTL::Function*> closestHit;
+        std::vector<MTL::Function*> intersection;
+        std::vector<int> intersectionKinds;
+    };
+
+    std::vector<PayloadFunctions> payloadFunctions(schema.payloads.size());
+    std::vector<MTL::Function*> callableFunctions(schema.callableShaders.size());
     std::vector<const NS::Object*> linkedFunctionObjects;
-    // The vectors are sized through the largest reflected slot. Null elements
-    // intentionally leave holes in the native function tables, preserving the
-    // source-level SBT indices.
-    for (size_t slot = 0; slot < layout.missGroups.size(); ++slot)
+    std::vector<MTL::Function*> loadedFunctions;
+    std::unordered_map<std::string, MTL::Function*> visibleFunctionsByName;
+    const auto loadVisibleFunction = [&](const std::string& name) -> MTL::Function*
     {
-        if (layout.missGroups[slot].miss.empty())
-            continue;
-        const auto functionName = getMetalFunctionName(layout.missGroups[slot].miss);
-        missFunctions[slot] = loadFunction(library, functionName.c_str());
-        linkedFunctionObjects.push_back(missFunctions[slot]);
-    }
-    for (size_t slot = 0; slot < layout.hitGroups.size(); ++slot)
+        if (name.empty())
+            throw std::runtime_error("a reflected Metal stage has no target entry-point name");
+        const auto found = visibleFunctionsByName.find(name);
+        if (found != visibleFunctionsByName.end())
+            return found->second;
+        auto function = loadFunction(library, name.c_str());
+        visibleFunctionsByName.emplace(name, function);
+        loadedFunctions.push_back(function);
+        linkedFunctionObjects.push_back(function);
+        return function;
+    };
+
+    for (size_t payloadIndex = 0; payloadIndex < schema.payloads.size(); ++payloadIndex)
     {
-        if (layout.hitGroups[slot].closestHit.empty())
-            continue;
-        const auto functionName = getMetalFunctionName(layout.hitGroups[slot].closestHit);
-        closestHitFunctions[slot] = loadFunction(library, functionName.c_str());
-        linkedFunctionObjects.push_back(closestHitFunctions[slot]);
+        const auto& reflectedPayload = schema.payloads[payloadIndex];
+        auto& functions = payloadFunctions[payloadIndex];
+        functions.miss.resize(reflectedPayload.missShaders.size());
+        functions.closestHit.resize(reflectedPayload.hitGroups.size());
+        functions.intersection.resize(reflectedPayload.metalIntersectionTableSize);
+        functions.intersectionKinds.resize(reflectedPayload.metalIntersectionTableSize, -1);
+
+        for (const auto& shader : reflectedPayload.missShaders)
+        {
+            if (shader.functionIndex < 0 ||
+                size_t(shader.functionIndex) >= functions.miss.size() ||
+                functions.miss[size_t(shader.functionIndex)])
+                throw std::runtime_error("invalid reflected Metal miss function index");
+            functions.miss[size_t(shader.functionIndex)] =
+                loadVisibleFunction(shader.stage.entryPointName);
+        }
+        for (auto function : functions.miss)
+            if (!function)
+                throw std::runtime_error("reflected Metal miss table contains a hole");
+
+        bool hasClosestHit = false;
+        for (const auto& group : reflectedPayload.hitGroups)
+        {
+            if (group.functionIndex < 0 ||
+                size_t(group.functionIndex) >= functions.closestHit.size())
+                throw std::runtime_error("invalid reflected Metal closest-hit function index");
+            if (!group.closestHit.entryPointName.empty())
+            {
+                functions.closestHit[size_t(group.functionIndex)] =
+                    loadVisibleFunction(group.closestHit.entryPointName);
+                hasClosestHit = true;
+            }
+        }
+        if (hasClosestHit)
+            for (auto function : functions.closestHit)
+                if (!function)
+                    throw std::runtime_error("reflected Metal closest-hit table contains a hole");
+
+        for (const auto& reflectedFunction : reflectedPayload.intersectionFunctions)
+        {
+            if (reflectedFunction.tableIndex < 0 ||
+                size_t(reflectedFunction.tableIndex) >= functions.intersection.size() ||
+                functions.intersectionKinds[size_t(reflectedFunction.tableIndex)] != -1)
+                throw std::runtime_error("invalid reflected Metal intersection-function index");
+            const auto tableIndex = size_t(reflectedFunction.tableIndex);
+            functions.intersectionKinds[tableIndex] = int(reflectedFunction.implementationKind);
+            if (reflectedFunction.implementationKind ==
+                ReflectedIntersectionFunctionKind::Exported)
+            {
+                if (reflectedFunction.entryPointName.empty())
+                    throw std::runtime_error("exported Metal intersection function has no name");
+                auto function = loadIntersectionFunction(
+                    library,
+                    reflectedFunction.entryPointName,
+                    &error);
+                if (!function)
+                    throw std::runtime_error(
+                        "load generated Metal intersection function: " + errorMessage(error));
+                functions.intersection[tableIndex] = function;
+                loadedFunctions.push_back(function);
+                linkedFunctionObjects.push_back(function);
+            }
+            else if (!reflectedFunction.entryPointName.empty())
+            {
+                throw std::runtime_error("built-in Metal intersection function has an exported name");
+            }
+        }
     }
+
+    for (const auto& shader : schema.callableShaders)
+    {
+        if (shader.functionIndex < 0 ||
+            size_t(shader.functionIndex) >= callableFunctions.size() ||
+            callableFunctions[size_t(shader.functionIndex)])
+            throw std::runtime_error("invalid reflected Metal callable function index");
+        callableFunctions[size_t(shader.functionIndex)] =
+            loadVisibleFunction(shader.stage.entryPointName);
+    }
+    for (auto function : callableFunctions)
+        if (!function)
+            throw std::runtime_error("reflected Metal callable table contains a hole");
 
     auto linkedFunctions = MTL::LinkedFunctions::alloc()->init();
     linkedFunctions->setFunctions(
@@ -264,27 +362,66 @@ MetalProgram createProgram(
     program.native = false;
     program.library = library;
     program.pipeline = pipeline;
-    program.missTable =
-        createVisibleFunctionTable(pipeline, missFunctions.data(), uint32_t(missFunctions.size()));
-    program.closestHitTable = createVisibleFunctionTable(
-        pipeline,
-        closestHitFunctions.data(),
-        uint32_t(closestHitFunctions.size()));
+    program.payloads.resize(schema.payloads.size());
+    for (size_t payloadIndex = 0; payloadIndex < schema.payloads.size(); ++payloadIndex)
+    {
+        const auto& reflectedPayload = schema.payloads[payloadIndex];
+        auto& functions = payloadFunctions[payloadIndex];
+        auto& payload = program.payloads[payloadIndex];
+        payload.missTable = createVisibleFunctionTable(
+            pipeline,
+            functions.miss.data(),
+            uint32_t(functions.miss.size()));
+        payload.closestHitTable = createVisibleFunctionTable(
+            pipeline,
+            functions.closestHit.data(),
+            uint32_t(functions.closestHit.size()));
 
-    auto intersectionDescriptor = MTL::IntersectionFunctionTableDescriptor::alloc()->init();
-    intersectionDescriptor->setFunctionCount(1);
-    program.intersectionTable = pipeline->newIntersectionFunctionTable(intersectionDescriptor);
-    intersectionDescriptor->release();
-    if (!program.intersectionTable)
-        throw std::runtime_error("create Metal intersection function table");
+        auto intersectionDescriptor = MTL::IntersectionFunctionTableDescriptor::alloc()->init();
+        intersectionDescriptor->setFunctionCount(
+            std::max(reflectedPayload.metalIntersectionTableSize, 1u));
+        payload.intersectionTable =
+            pipeline->newIntersectionFunctionTable(intersectionDescriptor);
+        intersectionDescriptor->release();
+        if (!payload.intersectionTable)
+            throw std::runtime_error("create Metal intersection function table");
+
+        const auto signature =
+            MTL::IntersectionFunctionSignature(reflectedPayload.metalIntersectionSignature);
+        for (size_t tableIndex = 0; tableIndex < functions.intersectionKinds.size(); ++tableIndex)
+        {
+            if (functions.intersectionKinds[tableIndex] == -1)
+                continue;
+            switch (ReflectedIntersectionFunctionKind(functions.intersectionKinds[tableIndex]))
+            {
+            case ReflectedIntersectionFunctionKind::Exported:
+                if (!functions.intersection[tableIndex])
+                    throw std::runtime_error("exported Metal intersection table entry is empty");
+                payload.intersectionTable->setFunction(
+                    pipeline->functionHandle(functions.intersection[tableIndex]),
+                    tableIndex);
+                break;
+            case ReflectedIntersectionFunctionKind::OpaqueTriangle:
+                payload.intersectionTable->setOpaqueTriangleIntersectionFunction(
+                    signature,
+                    tableIndex);
+                break;
+            case ReflectedIntersectionFunctionKind::OpaqueCurve:
+                payload.intersectionTable->setOpaqueCurveIntersectionFunction(
+                    signature,
+                    tableIndex);
+                break;
+            }
+        }
+    }
+    program.callableTable = createVisibleFunctionTable(
+        pipeline,
+        callableFunctions.data(),
+        uint32_t(callableFunctions.size()));
 
     kernel->release();
-    for (auto function : missFunctions)
-        if (function)
-            function->release();
-    for (auto function : closestHitFunctions)
-        if (function)
-            function->release();
+    for (auto function : loadedFunctions)
+        function->release();
     return program;
 }
 
@@ -317,6 +454,244 @@ uint64_t imageChecksum(const uint32_t* pixels)
     return hash;
 }
 
+enum class RecordSection : uint32_t
+{
+    Hit,
+    Miss,
+    Callable,
+    Count,
+};
+
+struct RecordInitializer
+{
+    RecordSection section;
+    uint32_t physicalIndex;
+    const char* payloadType;
+    const char* entryType;
+};
+
+size_t alignRecordSection(size_t value)
+{
+    constexpr size_t kAlignment = 16;
+    return (value + kAlignment - 1) & ~(kAlignment - 1);
+}
+
+size_t getRecordStride(const ReflectedProgramSchema& schema, RecordSection section)
+{
+    switch (section)
+    {
+    case RecordSection::Hit:
+        return schema.hitRecordStride;
+    case RecordSection::Miss:
+        return schema.missRecordStride;
+    case RecordSection::Callable:
+        return schema.callableRecordStride;
+    default:
+        throw std::runtime_error("invalid Metal record section");
+    }
+}
+
+const ReflectedPayload& findPayload(
+    const ReflectedProgramSchema& schema,
+    const char* payloadType)
+{
+    const auto found = std::find_if(
+        schema.payloads.begin(),
+        schema.payloads.end(),
+        [&](const ReflectedPayload& payload) { return payload.typeName == payloadType; });
+    if (found == schema.payloads.end())
+        throw std::runtime_error(std::string("schema is missing payload ") + payloadType);
+    return *found;
+}
+
+uint32_t getReflectedFunctionIndex(
+    const ReflectedProgramSchema& schema,
+    const RecordInitializer& initializer)
+{
+    int64_t functionIndex = -1;
+    if (initializer.section == RecordSection::Callable)
+    {
+        const auto found = std::find_if(
+            schema.callableShaders.begin(),
+            schema.callableShaders.end(),
+            [&](const ReflectedCallableShader& shader)
+            { return shader.typeName == initializer.entryType; });
+        if (found != schema.callableShaders.end())
+            functionIndex = found->functionIndex;
+    }
+    else
+    {
+        if (!initializer.payloadType)
+            throw std::runtime_error("a hit or miss record has no payload type");
+        const auto& payload = findPayload(schema, initializer.payloadType);
+        if (initializer.section == RecordSection::Hit)
+        {
+            const auto found = std::find_if(
+                payload.hitGroups.begin(),
+                payload.hitGroups.end(),
+                [&](const ReflectedHitGroup& group)
+                { return group.typeName == initializer.entryType; });
+            if (found != payload.hitGroups.end())
+                functionIndex = found->functionIndex;
+        }
+        else if (initializer.section == RecordSection::Miss)
+        {
+            const auto found = std::find_if(
+                payload.missShaders.begin(),
+                payload.missShaders.end(),
+                [&](const ReflectedMissShader& shader)
+                { return shader.typeName == initializer.entryType; });
+            if (found != payload.missShaders.end())
+                functionIndex = found->functionIndex;
+        }
+    }
+    if (functionIndex < 0 || uint64_t(functionIndex) > UINT32_MAX)
+        throw std::runtime_error("a Metal record does not identify a reflected shader");
+    return uint32_t(functionIndex);
+}
+
+void writeUInt32(std::vector<uint8_t>& bytes, size_t offset, uint32_t value)
+{
+    if (offset + sizeof(value) > bytes.size())
+        throw std::runtime_error("write outside Metal records buffer");
+    std::memcpy(bytes.data() + offset, &value, sizeof(value));
+}
+
+MTL::Buffer* createRecords(MTL::Device* device, const ReflectedProgramSchema& schema)
+{
+    // The same reflected function index may appear in several payload partitions. Resolve each
+    // physical record by the (payload type, schema entry type) pair, never by a global index.
+    const RecordInitializer records[] = {
+        {RecordSection::Hit,
+         cornell::kPrimaryHitRecord,
+         "PrimaryPayload",
+         "PrimaryHitGroup"},
+        {RecordSection::Hit,
+         cornell::kShadowHitRecord,
+         "ShadowPayload",
+         "ShadowHitGroup"},
+        {RecordSection::Miss,
+         cornell::kPrimaryMissRecord,
+         "PrimaryPayload",
+         "PrimaryMiss"},
+        {RecordSection::Miss,
+         cornell::kShadowMissRecord,
+         "ShadowPayload",
+         "ShadowMiss"},
+    };
+
+    uint32_t recordCounts[uint32_t(RecordSection::Count)] = {};
+    for (const auto& record : records)
+    {
+        const auto section = uint32_t(record.section);
+        recordCounts[section] = std::max(recordCounts[section], record.physicalIndex + 1);
+    }
+
+    constexpr size_t kSectionHeaderSize = sizeof(uint32_t) * 4;
+    constexpr uint32_t kInstancePathTrieWord = 0;
+    if (schema.metalRecordHeaderSize < sizeof(uint32_t))
+        throw std::runtime_error("schema reports an invalid Metal record-header size");
+
+    size_t sectionOffsets[uint32_t(RecordSection::Count)] = {};
+    size_t byteCount = kSectionHeaderSize + sizeof(kInstancePathTrieWord);
+    for (uint32_t section = 0; section < uint32_t(RecordSection::Count); ++section)
+    {
+        const auto stride = getRecordStride(schema, RecordSection(section));
+        if (stride < schema.metalRecordHeaderSize || (stride & 15) != 0)
+            throw std::runtime_error("schema reports an invalid Metal record stride");
+        byteCount = alignRecordSection(byteCount);
+        sectionOffsets[section] = byteCount;
+        byteCount += stride * recordCounts[section];
+    }
+    byteCount = alignRecordSection(byteCount);
+
+    std::vector<uint8_t> bytes(byteCount);
+    writeUInt32(bytes, 0, uint32_t(kSectionHeaderSize));
+    for (uint32_t section = 0; section < uint32_t(RecordSection::Count); ++section)
+    {
+        writeUInt32(bytes, sizeof(uint32_t) * (section + 1), uint32_t(sectionOffsets[section]));
+        const auto stride = getRecordStride(schema, RecordSection(section));
+        for (uint32_t record = 0; record < recordCounts[section]; ++record)
+            writeUInt32(bytes, sectionOffsets[section] + record * stride, UINT32_MAX);
+    }
+    writeUInt32(bytes, kSectionHeaderSize, kInstancePathTrieWord);
+
+    for (const auto& record : records)
+    {
+        const auto section = uint32_t(record.section);
+        const auto offset = sectionOffsets[section] +
+                            record.physicalIndex * getRecordStride(schema, record.section);
+        writeUInt32(bytes, offset, getReflectedFunctionIndex(schema, record));
+    }
+
+    auto buffer =
+        device->newBuffer(bytes.data(), bytes.size(), MTL::ResourceStorageModeShared);
+    if (!buffer)
+        throw std::runtime_error("create Metal records buffer");
+    return buffer;
+}
+
+MTL::Buffer* createProgramResourceBuffer(
+    MTL::Device* device,
+    const ReflectedProgramSchema& schema,
+    const MetalProgram& program,
+    MTL::Buffer* records)
+{
+    std::vector<uint64_t> resources(schema.descriptorResources.size());
+    std::vector<bool> populated(resources.size());
+    for (const auto& reflected : schema.descriptorResources)
+    {
+        if (reflected.metalArgumentBufferIndex < 0 ||
+            size_t(reflected.metalArgumentBufferIndex) >= resources.size() ||
+            populated[size_t(reflected.metalArgumentBufferIndex)])
+            throw std::runtime_error("schema reports an invalid Metal descriptor binding");
+
+        uint64_t resource = 0;
+        const auto payloadResource = [&]() -> const MetalPayloadProgram&
+        {
+            if (reflected.payloadIndex < 0 ||
+                size_t(reflected.payloadIndex) >= program.payloads.size())
+                throw std::runtime_error("schema reports an invalid Metal payload resource");
+            return program.payloads[size_t(reflected.payloadIndex)];
+        };
+        switch (reflected.kind)
+        {
+        case ReflectedDescriptorResourceKind::IntersectionFunctionTable:
+            resource = payloadResource().intersectionTable->gpuResourceID()._impl;
+            break;
+        case ReflectedDescriptorResourceKind::MissVisibleFunctionTable:
+            resource = payloadResource().missTable->gpuResourceID()._impl;
+            break;
+        case ReflectedDescriptorResourceKind::ClosestHitVisibleFunctionTable:
+            resource = payloadResource().closestHitTable->gpuResourceID()._impl;
+            break;
+        case ReflectedDescriptorResourceKind::CallableVisibleFunctionTable:
+            if (reflected.payloadIndex != -1)
+                throw std::runtime_error("callable table unexpectedly belongs to a payload");
+            resource = program.callableTable->gpuResourceID()._impl;
+            break;
+        case ReflectedDescriptorResourceKind::Records:
+            if (reflected.payloadIndex != -1)
+                throw std::runtime_error("records buffer unexpectedly belongs to a payload");
+            resource = records->gpuAddress();
+            break;
+        }
+        resources[size_t(reflected.metalArgumentBufferIndex)] = resource;
+        populated[size_t(reflected.metalArgumentBufferIndex)] = true;
+    }
+    for (bool value : populated)
+        if (!value)
+            throw std::runtime_error("schema leaves a Metal descriptor binding unpopulated");
+
+    auto buffer = device->newBuffer(
+        resources.data(),
+        resources.size() * sizeof(uint64_t),
+        MTL::ResourceStorageModeShared);
+    if (!buffer)
+        throw std::runtime_error("create Metal trace-program resource buffer");
+    return buffer;
+}
+
 double dispatchFrame(
     MTL::CommandQueue* queue,
     const MetalScene& scene,
@@ -341,9 +716,13 @@ double dispatchFrame(
     encoder->useResource(scene.topLevel, MTL::ResourceUsageRead);
     if (!program.native)
     {
-        encoder->useResource(program.intersectionTable, MTL::ResourceUsageRead);
-        encoder->useResource(program.missTable, MTL::ResourceUsageRead);
-        encoder->useResource(program.closestHitTable, MTL::ResourceUsageRead);
+        for (const auto& payload : program.payloads)
+        {
+            encoder->useResource(payload.intersectionTable, MTL::ResourceUsageRead);
+            encoder->useResource(payload.missTable, MTL::ResourceUsageRead);
+            encoder->useResource(payload.closestHitTable, MTL::ResourceUsageRead);
+        }
+        encoder->useResource(program.callableTable, MTL::ResourceUsageRead);
         encoder->useResource(programResourceBuffer, MTL::ResourceUsageRead);
         encoder->useResource(records, MTL::ResourceUsageRead);
     }
@@ -446,7 +825,7 @@ void writeRuntimeBenchmark(
 
 int run(
     const char* metalSourcePath,
-    const char* programLayoutPath,
+    const char* programSchemaPath,
     const char* outputPath,
     bool headless,
     uint32_t maximumFrames,
@@ -469,14 +848,11 @@ int run(
 
     auto sceneData = cornell::makeScene();
     auto scene = buildScene(device, queue, sceneData);
-    const auto reflectedLayout =
-        native ? ReflectedProgramLayout() : readReflectedProgramLayout(programLayoutPath);
-    auto program = createProgram(device, metalSourcePath, reflectedLayout, native);
+    const auto reflectedSchema =
+        native ? ReflectedProgramSchema() : readReflectedProgramSchema(programSchemaPath);
+    auto program = createProgram(device, metalSourcePath, reflectedSchema, native);
 
-    static const uint32_t kRecords[] = {1, 0};
-    auto records =
-        native ? nullptr
-               : device->newBuffer(kRecords, sizeof(kRecords), MTL::ResourceStorageModeShared);
+    auto records = native ? nullptr : createRecords(device, reflectedSchema);
     auto surfaces = device->newBuffer(
         sceneData.surfaces.data(),
         sceneData.surfaces.size() * sizeof(cornell::Surface),
@@ -486,21 +862,8 @@ int run(
 
     MTL::Buffer* programResourceBuffer = nullptr;
     if (!native)
-    {
-        TraceProgramResources programResources = {
-            program.intersectionTable->gpuResourceID()._impl,
-            program.missTable->gpuResourceID()._impl,
-            program.closestHitTable->gpuResourceID()._impl,
-            records->gpuAddress(),
-            records->gpuAddress(),
-        };
-        programResourceBuffer = device->newBuffer(
-            &programResources,
-            sizeof(programResources),
-            MTL::ResourceStorageModeShared);
-        if (!programResourceBuffer)
-            throw std::runtime_error("create Metal trace-program resource buffer");
-    }
+        programResourceBuffer =
+            createProgramResourceBuffer(device, reflectedSchema, program, records);
 
     MTL::Buffer* output = nullptr;
     if (headless || benchmark)
@@ -655,12 +1018,17 @@ int run(
     surfaces->release();
     if (records)
         records->release();
-    if (program.intersectionTable)
-        program.intersectionTable->release();
-    if (program.closestHitTable)
-        program.closestHitTable->release();
-    if (program.missTable)
-        program.missTable->release();
+    for (auto& payload : program.payloads)
+    {
+        if (payload.intersectionTable)
+            payload.intersectionTable->release();
+        if (payload.closestHitTable)
+            payload.closestHitTable->release();
+        if (payload.missTable)
+            payload.missTable->release();
+    }
+    if (program.callableTable)
+        program.callableTable->release();
     program.pipeline->release();
     program.library->release();
     scene.topLevel->release();
@@ -681,7 +1049,7 @@ int main(int argc, char** argv)
     {
         std::fprintf(
             stderr,
-            "usage: %s <generated-metal-source> <reflected-layout> [--headless] "
+            "usage: %s <generated-metal-source> <reflected-schema> [--headless] "
             "[--implementation structural|native] [--output output.ppm] "
             "[--benchmark --benchmark-output result.json]\n",
             argv[0]);

@@ -77,5 +77,5 @@ xcrun clang++ \
 
 "$demo_root/build/structural-rt-cornell-metal" \
     "$metal_source" \
-    "$demo_root/generated/program-layout.txt" \
+    "$demo_root/generated/program-schema.txt" \
     "$@"

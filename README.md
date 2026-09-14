@@ -18,11 +18,11 @@ The repository also contains equivalent baselines for performance work: the lega
 
 Click the image to play the three-second screen recording with a small interactive camera pan.
 
-`ProgramLayout` intentionally places the primary ray at logical slot 1 and the shadow ray at slot
-4. Slots 0, 2, and 3 are holes. This is deliberately irregular so the demo shows the intended host
-programming model: reflect the declared slots, allocate each native table through the largest
-slot, and place records by reflected index rather than declaration order. A sparse layout consumes
-space for its holes, and shader code must not trace to an unpopulated slot.
+`ProgramSchema` declares which hit, miss, and callable programs are available, but it does not
+declare an SBT layout. The host deliberately places primary records at physical index 1 and shadow
+records at index 4, leaving holes. It passes those selectors in `FrameData`. The structural shader
+uses distinct `PrimaryPayload` and `ShadowPayload` partitions; each partition independently
+reflects hit and miss function index 0.
 
 The scene is built from opaque triangles: five Cornell-box walls and two interior boxes. GLFW owns
 the window and input on every platform; it is included as the `external/glfw` submodule. The Linux
@@ -44,7 +44,7 @@ The default mode is interactive:
 
 ## Linux: slang-rhi with Vulkan or OptiX
 
-The default paths point at the current structural-ray-tracing worktree and its Debug build:
+The default paths point at `../another-slang-rt-integration` and its Release build:
 
 ```bash
 ./run-linux.sh
@@ -55,7 +55,7 @@ Override them when needed:
 ```bash
 SLANG_REPO=/path/to/slang \
 SLANG_BUILD=/path/to/slang/build \
-SLANG_CONFIG=Debug \
+SLANG_CONFIG=Release \
 ./run-linux.sh
 ```
 
@@ -73,7 +73,7 @@ Select the legacy API with the same host and scene:
 ./run-linux.sh --api legacy --backend vulkan
 ```
 
-Select OptiX with the same host and shader layout:
+Select OptiX with the same host and host-owned record layout:
 
 ```bash
 ./run-linux.sh --backend optix
@@ -83,10 +83,10 @@ Select OptiX with the same host and shader layout:
 The headless command writes `cornell-box-optix.ppm`. The helper supplies NVRTC with the OptiX
 headers from the selected Slang worktree.
 
-The slang-rhi host calls `findTraceProgramLayout("ProgramLayout")` and enumerates the reflected hit,
-miss, and callable groups. Their reflected slots determine the pipeline and shader-table indices;
-their reflected stage names locate synthesized entry points in `rt_pipeline`. No stage-table index
-is inferred from source declaration order.
+The slang-rhi host calls `findTraceProgramSchema("ProgramSchema")`. It uses reflected payload and
+attribute ABI sizes for pipeline creation, then resolves each physical record by the pair
+`(payload type, schema entry type)`. Function indices are local to a payload partition and are not
+physical SBT positions.
 
 ## Windows: slang-rhi and D3D12
 
@@ -119,7 +119,8 @@ Pass `-Api legacy` to run the equivalent old pipeline API:
 
 ## macOS: Metal-cpp
 
-Generate `generated/cornell-box.metal` and `generated/program-layout.txt` on the Linux build host,
+Run `run-linux.sh` once to generate `generated/cornell-box.metal` and
+`generated/program-schema.txt`,
 place Apple's `metal-cpp` headers in `metal-cpp/` (or set `METAL_CPP_DIR`), and run:
 
 ```bash
@@ -144,11 +145,12 @@ Run the hand-written Metal baseline with:
 ./run-macos.sh --implementation native
 ```
 
-`run-linux.sh` also serializes that structural reflection to
-`generated/program-layout.txt`, alongside the generated Metal source. This models an offline shader
-build: the Metal host reads the reflected slots and inserts each visible function at that index in
-the Metal function table. The manifest is generated data, not a second hand-authored description of
-the SBT layout.
+`run-linux.sh` builds `metal-artifact-generator.cpp` against the selected Slang compiler. The tool
+generates MSL and serializes target-specific schema reflection, descriptor binding IDs, record
+strides, per-payload function tables, intersection signatures, and compiler provenance together.
+The Metal host reads this sidecar and separately builds the host-owned physical record layout. The
+manifest also fingerprints the generated MSL so stale or mismatched artifact pairs fail before
+pipeline compilation. It is generated ABI data, not a second shader-side SBT declaration.
 
 With the current compiler and scene, every headless backend produces checksum
 `777626b0f3ca5dd9`.
@@ -156,12 +158,14 @@ With the current compiler and scene, every headless backend produces checksum
 ## Performance measurements
 
 The current cross-platform results and their interpretation are in
-[reports/performance.md](reports/performance.md). Each platform script first renders both lanes and
-aborts unless their PPM files are byte-for-byte identical. It then runs five warmups and 50 measured
-iterations by default:
+[reports/performance.md](reports/performance.md). The migration checklist and design-gap assessment
+are in [reports/dynamic-schema-migration.md](reports/dynamic-schema-migration.md).
+
+Each platform script first renders both lanes and aborts unless their PPM files are byte-for-byte
+identical. It then runs five warmups and 50 measured iterations by default:
 
 ```bash
-# Linux: Slang→SPIR-V, spirv-opt, and Vulkan GPU time
+# Linux: Slang→SPIR-V, spirv-opt, Vulkan GPU time, and OptiX GPU time
 SLANG_PERF_COMPILER_ROOT=/path/to/slang/build/Release ./run-perf-linux.sh
 
 # macOS: generated/hand-written MSL compilation and Metal GPU time
@@ -186,33 +190,41 @@ regenerate the checked-in report after collecting results, run:
 python3 perf/report.py --input-dir perf-results --output reports/performance.md
 ```
 
+Use the repeatable `--refresh-run "platform: run-id"` option when the results came from saved
+build-farm runs and should carry those run IDs into the report.
+
 The metrics have deliberately narrow boundaries:
 
 - `total_wall_ms` creates a fresh Slang session, loads and links the module, then extracts target
-  code. SPIR-V and MSL use `getTargetCode`; DXIL extracts every entry point with
-  `getEntryPointCode`, matching slang-rhi's D3D12 pipeline path.
+  code. SPIR-V uses `getTargetCode`, MSL uses the ray-generation `getEntryPointCode`, and DXIL
+  extracts every entry point with `getEntryPointCode`, matching slang-rhi's D3D12 pipeline path.
 - `downstream_ms` is the delta from Slang's compiler timer. It measures `spirv-opt` for direct
   SPIR-V generation and DXC for DXIL. `slang_ms` is total wall time minus that delta.
 - Metal downstream time is synchronous `MTLDevice::newLibrary(source)` wall time. Every sample adds
   a clock-seeded unique trailing source comment to avoid persistent source-hash cache hits.
-- Runtime is steady-state GPU dispatch time only. Vulkan and D3D12 use timestamp queries directly
-  around `dispatchRays`; Metal uses the GPU start/end timestamps of a command buffer containing one
-  compute dispatch. Setup and pipeline compilation are excluded.
+- Runtime is steady-state GPU dispatch time only. Vulkan, OptiX, and D3D12 use timestamp queries
+  directly around `dispatchRays`; Metal uses the GPU start/end timestamps of a command buffer
+  containing one compute dispatch. Setup and pipeline compilation are excluded.
 
-`perf/slang-compile-benchmark.cpp` is sample-independent: add repeated `--case` and `--entry`
-arguments to benchmark another port without rewriting the timer. `perf/metal-compile-benchmark.cpp`
-likewise accepts repeated named Metal source cases. Both emit the common
+`perf/slang-compile-benchmark.cpp` is reusable: each `--case` supplies an optional reflected schema
+name, `--entry` supplies ordinary roots such as ray generation, and `--legacy-entry` supplies only
+the explicit stages needed by old pipeline shaders. The tool discovers structural stages from the
+schema. `perf/metal-compile-benchmark.cpp` likewise accepts repeated named Metal source cases. Both emit the common
 `slang-ray-tracing-perf-v1` JSON schema consumed by `perf/report.py`.
+
+The refresh scripts write new structural-only result files and retain existing legacy/native
+baseline JSON. The report shows compiler/source provenance per compile row and labels comparisons
+that cross compiler revisions.
 
 ## Files
 
-- `shaders/shared.slang`: imported module containing the shared payload, contexts, frame data, and
+- `shaders/shared.slang`: imported module containing the two payloads, contexts, frame data, and
   ray construction.
 - `shaders/rt_pipeline.slang`: pipeline module and short table of contents that `__include`s the
   remaining shader files.
 - `shaders/hit.slang`: included primary and shadow closest-hit stages.
 - `shaders/miss.slang`: included primary and shadow miss stages.
-- `shaders/program_layout.slang`: included structural SBT declaration with sparse slots 1 and 4.
+- `shaders/program_schema.slang`: included shader-program schema; it contains no SBT positions.
 - `shaders/raygen.slang`: included ray-generation entry point and direct-lighting orchestration.
 - `shaders-legacy/`: equivalent old-API Slang ray-generation, hit, and miss shaders.
 - `shaders/cornell-box-native.metal`: equivalent hand-written native Metal intersector baseline.
@@ -221,6 +233,8 @@ likewise accepts repeated named Metal source cases. Both emit the common
 - `rhi-main.cpp`: shared Vulkan, OptiX, and D3D12 slang-rhi host with interactive and headless
   modes.
 - `metal-main.cpp`: interactive Metal-cpp host with a headless mode.
+- `metal-artifact-generator.cpp`: compiler-API tool that emits MSL plus its reflected Metal ABI
+  sidecar.
 - `macos-metal-layer.mm`: minimal bridge attaching a Metal layer to GLFW's native macOS window.
 - `run-linux.sh`, `run-windows.ps1`, and `run-macos.sh`: local build-and-run helpers.
 - `perf/` and `run-perf-*`: reusable compile/runtime measurement tools, report generator, and

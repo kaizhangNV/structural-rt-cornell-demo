@@ -12,6 +12,13 @@ namespace cornell
 constexpr uint32_t kImageWidth = 256;
 constexpr uint32_t kImageHeight = 256;
 
+// The physical shader-table layout is a host policy. Keeping deliberately sparse records makes it
+// visible that ProgramSchema declares programs, not their runtime positions.
+constexpr uint32_t kPrimaryHitRecord = 1;
+constexpr uint32_t kPrimaryMissRecord = 1;
+constexpr uint32_t kShadowHitRecord = 4;
+constexpr uint32_t kShadowMissRecord = 4;
+
 struct Float3
 {
     float x;
@@ -59,6 +66,10 @@ struct FrameData
     uint32_t imageSize[2];
     uint32_t rowStride;
     uint32_t outputBgra;
+    uint32_t primaryHitRecord;
+    uint32_t primaryMissRecord;
+    uint32_t shadowHitRecord;
+    uint32_t shadowMissRecord;
 };
 
 struct Camera
@@ -103,6 +114,10 @@ struct Camera
             {width, height},
             stride,
             bgra ? 1u : 0u,
+            kPrimaryHitRecord,
+            kPrimaryMissRecord,
+            kShadowHitRecord,
+            kShadowMissRecord,
         };
     }
 };

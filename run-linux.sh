@@ -3,9 +3,9 @@
 set -euo pipefail
 
 demo_root="$(cd "$(dirname "$0")" && pwd)"
-slang_repo="${SLANG_REPO:-$demo_root/../another-slang-rt-recovery}"
+slang_repo="${SLANG_REPO:-$demo_root/../another-slang-rt-integration}"
 slang_build="${SLANG_BUILD:-$slang_repo/build}"
-config="${SLANG_CONFIG:-Debug}"
+config="${SLANG_CONFIG:-Release}"
 compiler="${CXX:-c++}"
 limited_build="${LIMITED_BUILD_WRAPPER:-$HOME/.codex/skills/limit-cpp-build-parallelism/scripts/run-limited-build.sh}"
 
@@ -42,15 +42,26 @@ NATIVE_BUILD_JOBS=8 "$limited_build" cmake \
     -DGLFW_BUILD_X11=ON
 NATIVE_BUILD_JOBS=8 "$limited_build" cmake --build "$demo_root/build/glfw" --parallel 8
 
+NATIVE_BUILD_JOBS=8 "$limited_build" "$compiler" \
+    -std=c++17 \
+    -O2 \
+    -I"$slang_repo/include" \
+    "$demo_root/metal-artifact-generator.cpp" \
+    "$slang_build/$config/lib/libslang-compiler.so" \
+    -Wl,-rpath,"$slang_build/$config/lib" \
+    -o "$demo_root/build/structural-rt-metal-artifact-generator"
+
 (
     cd "$demo_root"
-    "$slang_build/$config/bin/slangc" \
-        shaders/rt_pipeline.slang \
-        -experimental-feature \
-        -entry RayGeneration \
-        -stage raygeneration \
-        -target metal \
-        -o generated/cornell-box.metal
+    LD_LIBRARY_PATH="$slang_build/$config/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+        build/structural-rt-metal-artifact-generator \
+        shaders \
+        rt_pipeline \
+        RayGeneration \
+        ProgramSchema \
+        generated/cornell-box.metal \
+        generated/program-schema.txt \
+        "$(git -C "$slang_repo" rev-parse HEAD)"
 )
 
 NATIVE_BUILD_JOBS=8 "$limited_build" "$compiler" \
@@ -83,6 +94,5 @@ NATIVE_BUILD_JOBS=8 "$limited_build" "$compiler" \
 LD_LIBRARY_PATH="$slang_build/$config/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
     "$demo_root/build/structural-rt-cornell-rhi" \
     "$shader_directory" \
-    --reflection-output "$demo_root/generated/program-layout.txt" \
     --optix-include "$slang_repo/external/optix-dev/include" \
     "$@"

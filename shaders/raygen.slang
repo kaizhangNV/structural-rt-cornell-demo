@@ -1,7 +1,7 @@
 implementing rt_pipeline;
 
 rt::AccelerationStructure scene;
-rt::TraceProgramDescriptor<ProgramLayout> program;
+rt::TraceProgramDescriptor<ProgramSchema> program;
 RWStructuredBuffer<uint> output;
 uniform FrameData frame;
 
@@ -27,10 +27,16 @@ void RayGeneration()
         frame.cameraForward.xyz + frame.cameraRight.xyz * ndc.x * aspect * 0.62 +
         frame.cameraUp.xyz * ndc.y * 0.62);
 
-    rt::RayTracer<ProgramLayout> tracer;
-    RayPayload payload = {};
+    rt::RayTracer<ProgramSchema> tracer;
+    PrimaryPayload payload = {};
     tracer.trace(
-        makeRay(frame.cameraPosition.xyz, direction, 100.0, kPrimarySlot),
+        makeRay(
+            frame.cameraPosition.xyz,
+            direction,
+            100.0,
+            RAY_FLAG_NONE,
+            frame.primaryHitRecord,
+            frame.primaryMissRecord),
         scene,
         program,
         payload);
@@ -43,13 +49,15 @@ void RayGeneration()
         float lightDistance = length(toLight);
         float3 lightDirection = toLight / lightDistance;
 
-        RayPayload shadowPayload = {};
+        ShadowPayload shadowPayload = {};
         tracer.trace(
             makeRay(
                 payload.hitPosition + payload.normal * 0.002,
                 lightDirection,
                 lightDistance - 0.004,
-                kShadowSlot),
+                RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
+                frame.shadowHitRecord,
+                frame.shadowMissRecord),
             scene,
             program,
             shadowPayload);

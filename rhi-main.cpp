@@ -1,5 +1,5 @@
 #include "demo-window.h"
-#include "program-layout-reflection.h"
+#include "program-schema-reflection.h"
 #include "scene.h"
 
 #include <algorithm>
@@ -277,29 +277,27 @@ SceneResources buildScene(IDevice* device, ICommandQueue* queue, const cornell::
 struct LoadedProgram
 {
     ComPtr<IShaderProgram> shaderProgram;
-    ReflectedProgramLayout layout;
+    ReflectedProgramSchema schema;
 };
 
-ReflectedProgramLayout getLegacyProgramLayout()
+ReflectedProgramSchema getLegacyProgramSchema()
 {
-    ReflectedProgramLayout layout;
-    placeReflectedGroup(
-        layout.hitGroups,
-        1,
-        ReflectedHitGroup{1, "PrimaryHitGroup", "PrimaryClosestHit", "", ""});
-    placeReflectedGroup(
-        layout.hitGroups,
-        4,
-        ReflectedHitGroup{4, "ShadowHitGroup", "ShadowClosestHit", "", ""});
-    placeReflectedGroup(
-        layout.missGroups,
-        1,
-        ReflectedMissGroup{1, "PrimaryMissGroup", "PrimaryMiss"});
-    placeReflectedGroup(
-        layout.missGroups,
-        4,
-        ReflectedMissGroup{4, "ShadowMissGroup", "ShadowMiss"});
-    return layout;
+    ReflectedProgramSchema schema;
+    schema.name = "LegacyProgram";
+    schema.maxNativeHitAttributeSize = sizeof(float) * 2;
+    ReflectedPayload payload;
+    payload.typeName = "RayPayload";
+    payload.nativePayloadSize = 64;
+    payload.hitGroups = {
+        {0, "PrimaryHitGroup", {"PrimaryClosestHit", "PrimaryClosestHit"}, {}, {}},
+        {1, "ShadowHitGroup", {"ShadowClosestHit", "ShadowClosestHit"}, {}, {}},
+    };
+    payload.missShaders = {
+        {0, "PrimaryMiss", {"PrimaryMiss", "PrimaryMiss"}},
+        {1, "ShadowMiss", {"ShadowMiss", "ShadowMiss"}},
+    };
+    schema.payloads.push_back(std::move(payload));
+    return schema;
 }
 
 LoadedProgram loadProgram(IDevice* device, RayTracingApi api)
@@ -311,9 +309,9 @@ LoadedProgram loadProgram(IDevice* device, RayTracingApi api)
     if (!module)
         throw std::runtime_error("load shaders/rt_pipeline.slang");
 
-    const auto reflectedLayout = api == RayTracingApi::Structural
-                                     ? reflectProgramLayout(module->getLayout(), "ProgramLayout")
-                                     : getLegacyProgramLayout();
+    const auto preliminarySchema = api == RayTracingApi::Structural
+                                       ? reflectProgramSchema(module->getLayout(), "ProgramSchema")
+                                       : getLegacyProgramSchema();
 
     struct Entry
     {
@@ -334,16 +332,19 @@ LoadedProgram loadProgram(IDevice* device, RayTracingApi api)
         if (duplicate == entries.end())
             entries.push_back({name, stage});
     };
-    for (const auto& group : reflectedLayout.hitGroups)
+    for (const auto& payload : preliminarySchema.payloads)
     {
-        addStage(group.closestHit, SLANG_STAGE_CLOSEST_HIT);
-        addStage(group.anyHit, SLANG_STAGE_ANY_HIT);
-        addStage(group.intersection, SLANG_STAGE_INTERSECTION);
+        for (const auto& group : payload.hitGroups)
+        {
+            addStage(group.closestHit.sourceName, SLANG_STAGE_CLOSEST_HIT);
+            addStage(group.anyHit.sourceName, SLANG_STAGE_ANY_HIT);
+            addStage(group.intersection.sourceName, SLANG_STAGE_INTERSECTION);
+        }
+        for (const auto& shader : payload.missShaders)
+            addStage(shader.stage.sourceName, SLANG_STAGE_MISS);
     }
-    for (const auto& group : reflectedLayout.missGroups)
-        addStage(group.miss, SLANG_STAGE_MISS);
-    for (const auto& group : reflectedLayout.callableGroups)
-        addStage(group.callable, SLANG_STAGE_CALLABLE);
+    for (const auto& shader : preliminarySchema.callableShaders)
+        addStage(shader.stage.sourceName, SLANG_STAGE_CALLABLE);
 
     std::vector<ComPtr<slang::IEntryPoint>> entryPoints;
     std::vector<slang::IComponentType*> components;
@@ -382,28 +383,37 @@ LoadedProgram loadProgram(IDevice* device, RayTracingApi api)
     result = device->createShaderProgram(programDesc, program.writeRef(), diagnostics.writeRef());
     printDiagnostics(diagnostics);
     check(result, "create shader program");
-    return {program, reflectedLayout};
+    const auto finalSchema = api == RayTracingApi::Structural
+                                 ? reflectProgramSchema(linked->getLayout(), "ProgramSchema")
+                                 : getLegacyProgramSchema();
+    return {program, finalSchema};
 }
 
 ComPtr<IRayTracingPipeline> createPipeline(
     IDevice* device,
     IShaderProgram* program,
-    const ReflectedProgramLayout& layout)
+    const ReflectedProgramSchema& schema)
 {
     std::vector<HitGroupDesc> hitGroups;
-    for (size_t slot = 0; slot < layout.hitGroups.size(); ++slot)
+    size_t maxPayloadSize = 0;
+    for (const auto& payload : schema.payloads)
     {
-        const auto& reflected = layout.hitGroups[slot];
-        if (reflected.groupName.empty())
-            continue;
-        HitGroupDesc group = {};
-        group.hitGroupName = reflected.groupName.c_str();
-        group.closestHitEntryPoint =
-            reflected.closestHit.empty() ? nullptr : reflected.closestHit.c_str();
-        group.anyHitEntryPoint = reflected.anyHit.empty() ? nullptr : reflected.anyHit.c_str();
-        group.intersectionEntryPoint =
-            reflected.intersection.empty() ? nullptr : reflected.intersection.c_str();
-        hitGroups.push_back(group);
+        maxPayloadSize = std::max(maxPayloadSize, payload.nativePayloadSize);
+        for (const auto& reflected : payload.hitGroups)
+        {
+            HitGroupDesc group = {};
+            group.hitGroupName = reflected.typeName.c_str();
+            group.closestHitEntryPoint = reflected.closestHit.entryPointName.empty()
+                                             ? nullptr
+                                             : reflected.closestHit.entryPointName.c_str();
+            group.anyHitEntryPoint = reflected.anyHit.entryPointName.empty()
+                                         ? nullptr
+                                         : reflected.anyHit.entryPointName.c_str();
+            group.intersectionEntryPoint = reflected.intersection.entryPointName.empty()
+                                              ? nullptr
+                                              : reflected.intersection.entryPointName.c_str();
+            hitGroups.push_back(group);
+        }
     }
 
     RayTracingPipelineDesc desc = {};
@@ -411,8 +421,8 @@ ComPtr<IRayTracingPipeline> createPipeline(
     desc.hitGroups = hitGroups.data();
     desc.hitGroupCount = uint32_t(hitGroups.size());
     desc.maxRecursion = 2;
-    desc.maxRayPayloadSize = 64;
-    desc.maxAttributeSizeInBytes = sizeof(float) * 2;
+    desc.maxRayPayloadSize = maxPayloadSize;
+    desc.maxAttributeSizeInBytes = schema.maxNativeHitAttributeSize;
 
     ComPtr<IRayTracingPipeline> pipeline;
     check(
@@ -424,21 +434,59 @@ ComPtr<IRayTracingPipeline> createPipeline(
 ComPtr<IShaderTable> createShaderTable(
     IDevice* device,
     IShaderProgram* program,
-    const ReflectedProgramLayout& layout)
+    const ReflectedProgramSchema& schema)
 {
     static const char* kRayGeneration[] = {"RayGeneration"};
-    // Reflection indexes these arrays by the declared logical slot. Empty strings
-    // intentionally create zeroed, unreachable native SBT records for sparse
-    // slots.
-    std::vector<const char*> missShaders(layout.missGroups.size());
-    for (size_t slot = 0; slot < layout.missGroups.size(); ++slot)
-        missShaders[slot] = layout.missGroups[slot].miss.c_str();
-    std::vector<const char*> hitGroups(layout.hitGroups.size());
-    for (size_t slot = 0; slot < layout.hitGroups.size(); ++slot)
-        hitGroups[slot] = layout.hitGroups[slot].groupName.c_str();
-    std::vector<const char*> callableShaders(layout.callableGroups.size());
-    for (size_t slot = 0; slot < layout.callableGroups.size(); ++slot)
-        callableShaders[slot] = layout.callableGroups[slot].callable.c_str();
+
+    const auto findPayload = [&](const char* typeName) -> const ReflectedPayload&
+    {
+        const auto found = std::find_if(
+            schema.payloads.begin(),
+            schema.payloads.end(),
+            [&](const ReflectedPayload& payload) { return payload.typeName == typeName; });
+        if (found == schema.payloads.end())
+            throw std::runtime_error(std::string("schema is missing payload ") + typeName);
+        return *found;
+    };
+    const auto findHitGroup = [&](const char* payloadType, const char* groupType)
+        -> const ReflectedHitGroup&
+    {
+        const auto& payload = findPayload(payloadType);
+        const auto found = std::find_if(
+            payload.hitGroups.begin(),
+            payload.hitGroups.end(),
+            [&](const ReflectedHitGroup& group) { return group.typeName == groupType; });
+        if (found == payload.hitGroups.end())
+            throw std::runtime_error(std::string("schema is missing hit group ") + groupType);
+        return *found;
+    };
+    const auto findMissShader = [&](const char* payloadType, const char* shaderType)
+        -> const ReflectedMissShader&
+    {
+        const auto& payload = findPayload(payloadType);
+        const auto found = std::find_if(
+            payload.missShaders.begin(),
+            payload.missShaders.end(),
+            [&](const ReflectedMissShader& shader) { return shader.typeName == shaderType; });
+        if (found == payload.missShaders.end())
+            throw std::runtime_error(std::string("schema is missing miss shader ") + shaderType);
+        return *found;
+    };
+
+    const bool legacy = schema.name == "LegacyProgram";
+    const char* primaryPayload = legacy ? "RayPayload" : "PrimaryPayload";
+    const char* shadowPayload = legacy ? "RayPayload" : "ShadowPayload";
+    const auto& primaryHit = findHitGroup(primaryPayload, "PrimaryHitGroup");
+    const auto& shadowHit = findHitGroup(shadowPayload, "ShadowHitGroup");
+    const auto& primaryMiss = findMissShader(primaryPayload, "PrimaryMiss");
+    const auto& shadowMiss = findMissShader(shadowPayload, "ShadowMiss");
+
+    std::vector<const char*> missShaders(cornell::kShadowMissRecord + 1, "");
+    missShaders[cornell::kPrimaryMissRecord] = primaryMiss.stage.entryPointName.c_str();
+    missShaders[cornell::kShadowMissRecord] = shadowMiss.stage.entryPointName.c_str();
+    std::vector<const char*> hitGroups(cornell::kShadowHitRecord + 1, "");
+    hitGroups[cornell::kPrimaryHitRecord] = primaryHit.typeName.c_str();
+    hitGroups[cornell::kShadowHitRecord] = shadowHit.typeName.c_str();
 
     ShaderTableDesc desc = {};
     desc.program = program;
@@ -448,8 +496,8 @@ ComPtr<IShaderTable> createShaderTable(
     desc.missShaderEntryPointNames = missShaders.data();
     desc.hitGroupCount = uint32_t(hitGroups.size());
     desc.hitGroupNames = hitGroups.data();
-    desc.callableShaderCount = uint32_t(callableShaders.size());
-    desc.callableShaderEntryPointNames = callableShaders.data();
+    desc.callableShaderCount = 0;
+    desc.callableShaderEntryPointNames = nullptr;
 
     ComPtr<IShaderTable> table;
     check(device->createShaderTable(desc, table.writeRef()), "create shader table");
@@ -494,7 +542,7 @@ struct RenderResources
     ComPtr<IShaderProgram> program;
     ComPtr<IRayTracingPipeline> pipeline;
     ComPtr<IShaderTable> shaderTable;
-    ReflectedProgramLayout programLayout;
+    ReflectedProgramSchema programSchema;
 };
 
 RenderResources createRenderer(
@@ -557,12 +605,12 @@ RenderResources createRenderer(
     renderer.scene = buildScene(renderer.device, renderer.queue, sceneData);
     auto loadedProgram = loadProgram(renderer.device, api);
     renderer.program = loadedProgram.shaderProgram;
-    renderer.programLayout = std::move(loadedProgram.layout);
+    renderer.programSchema = std::move(loadedProgram.schema);
     if (reflectionOutput)
-        writeReflectedProgramLayout(reflectionOutput, renderer.programLayout);
-    renderer.pipeline = createPipeline(renderer.device, renderer.program, renderer.programLayout);
+        writeReflectedProgramSchema(reflectionOutput, renderer.programSchema);
+    renderer.pipeline = createPipeline(renderer.device, renderer.program, renderer.programSchema);
     renderer.shaderTable =
-        createShaderTable(renderer.device, renderer.program, renderer.programLayout);
+        createShaderTable(renderer.device, renderer.program, renderer.programSchema);
 
     BufferDesc surfaceDesc = {};
     surfaceDesc.size = sceneData.surfaces.size() * sizeof(cornell::Surface);

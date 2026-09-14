@@ -2,9 +2,11 @@ implementing rt_pipeline;
 
 public StructuredBuffer<Surface> surfaces;
 
-public struct PrimaryClosestHit : rt::IClosestHitShader<HitContext>
+public struct PrimaryClosestHit : rt::IClosestHitShader
 {
-    void invoke(rt::ClosestHitInput<HitContext> input)
+    typealias Context = PrimaryHitContext;
+
+    void invoke(rt::ClosestHitInput<Context> input)
     {
         Surface surface = surfaces[input.primitiveIndex];
         input.payload.hitPosition =
@@ -15,9 +17,11 @@ public struct PrimaryClosestHit : rt::IClosestHitShader<HitContext>
     }
 }
 
-public struct ShadowClosestHit : rt::IClosestHitShader<HitContext>
+public struct ShadowClosestHit : rt::IClosestHitShader
 {
-    void invoke(rt::ClosestHitInput<HitContext> input)
+    typealias Context = ShadowHitContext;
+
+    void invoke(rt::ClosestHitInput<Context> input)
     {
         input.payload.occluded = 1;
     }
