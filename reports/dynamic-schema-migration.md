@@ -74,13 +74,13 @@ Two compiler implementation bugs were found outside the API design:
   Cornell host continues to use the reflected value rather than hiding the bug with a 64-byte
   constant.
 - On D3D12, a schema descriptor retained by global-parameter layout metadata could leak as raw
-  Slang `ParameterBlock` syntax into the HLSL sent to DXC. Final revision
+  Slang `ParameterBlock` syntax into the HLSL sent to DXC. Measurement revision
   `cdecb75031c1ce125985e51032c00a11c1f85492` erases this zero-storage descriptor for D3D targets,
   preserves the source shape required by CUDA/OptiX lowering, and carries focused HLSL/DXIL
   regression coverage.
 
-With that final revision, Vulkan, OptiX, and D3D12 render the split-payload schema byte-identically
-to legacy; generated Metal is byte-identical to the hand-written native baseline.
+With that measurement revision, Vulkan, OptiX, and D3D12 render the split-payload schema
+byte-identically to legacy; generated Metal is byte-identical to the hand-written native baseline.
 
 ## Workarounds and intentional omissions
 
@@ -104,6 +104,12 @@ to legacy; generated Metal is byte-identical to the hand-written native baseline
 - Linux isolated run: `20260914-cdecb7503-linux-isolated-v2`.
 - Windows run: `20260914-cdecb7503-structural-final`.
 - macOS artifact-pair run: `20260914-cdecb7503-metal-pair-final`.
+
+Post-measurement compiler validation: Slang revision
+`29969e72bacd308672b37e23a1b2ad7ea88c5ee2` scopes structural runtime checks to modules whose
+dependency closure imports `slang.raytracing` and adds focused module-visibility regression
+coverage. This compiler hardening was published after the Cornell measurements; the performance
+and correctness results above were not rerun and remain attributed to `cdecb75031c1`.
 
 Each performance lane used five warmups and 50 measured samples. Vulkan, OptiX, D3D12, and Metal
 all passed their byte-identical correctness gate.

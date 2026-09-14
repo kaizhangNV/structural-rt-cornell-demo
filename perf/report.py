@@ -138,7 +138,7 @@ def runner_section(results: list[dict[str, Any]]) -> list[str]:
         ),
     ]
     lines = [
-        "## Runner environments",
+        "## Structural refresh runner environments",
         "",
         "| Measurements | OS and CPU | GPU |",
         "| --- | --- | --- |",
@@ -401,7 +401,8 @@ def methodology_section(results: list[dict[str, Any]]) -> list[str]:
         "- Each compile sample creates a fresh Slang session. A single global session is retained "
         "so precompiled standard-module setup is not repeatedly charged to either API.",
         "- Case order rotates each iteration to reduce persistent thermal and frequency bias. "
-        "Warmups are excluded, raw samples remain in `perf-results/`.",
+        "Warmups are excluded; raw samples are retained locally in the git-ignored "
+        "`perf-results/` directory and are not part of the published branch.",
         "- Compiler optimization is maximal for measured target generation. SPIR-V uses direct "
         "emission followed by Slang's configured `spirv-opt` downstream path.",
         "- Runtime measurements exclude device, acceleration-structure, shader, pipeline, and "
