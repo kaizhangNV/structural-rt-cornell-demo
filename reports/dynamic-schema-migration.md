@@ -60,10 +60,11 @@ The following boundaries still require host care:
   MSL file and reflection sidecar. The sidecar prevents the host from guessing compiler-owned
   argument-buffer IDs, record strides, table sizes, or function names, and the host rejects a
   sidecar whose generated-MSL fingerprint does not match.
-- Metal any-hit and intersection source stages do not have independent bindable symbols. They are
-  composed by source type, while reflected intersection-function dispatchers populate the IFT.
-  Closest-hit uses the group-level physical symbol so a synthesized `NoClosestHit` entry is not
-  lost.
+- Compiler and adapter contract tests show that Metal any-hit and intersection source stages do not
+  have independent bindable symbols. They are composed by source type, while reflected
+  intersection-function dispatchers populate the IFT. Closest-hit uses the group-level physical
+  symbol so a synthesized `NoClosestHit` entry is not lost. The Cornell runtime itself does not
+  exercise any-hit, custom intersection, or `NoClosestHit`.
 
 Two compiler implementation bugs were found outside the API design:
 
@@ -96,6 +97,8 @@ to legacy; generated Metal is byte-identical to the hand-written native baseline
 
 ## Validation provenance
 
+- Implementation and measured-results revision: `616893dab11a693b9a28608348ca77bf452efd3d` on
+  `codex/dynamic-schema-migration`.
 - Compiler source: `cdecb75031c1ce125985e51032c00a11c1f85492`; Linux build tag
   `2026.17.1-156-gcdecb7503`.
 - Linux isolated run: `20260914-cdecb7503-linux-isolated-v2`.

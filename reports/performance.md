@@ -6,7 +6,7 @@ Structural refresh runs: `Linux: 20260914-cdecb7503-linux-isolated-v2`, `Windows
 
 This report compares the legacy D3D/Vulkan pipeline ray-tracing API with the revised schema-based API. Metal instead compares generated Slang output with an equivalent hand-written native Metal implementation.
 
-## Runner environments
+## Structural refresh runner environments
 
 | Measurements | OS and CPU | GPU |
 | --- | --- | --- |
@@ -80,7 +80,7 @@ The rendered image is also identical across all three platform runners.
 ## Methodology and interpretation
 
 - Each compile sample creates a fresh Slang session. A single global session is retained so precompiled standard-module setup is not repeatedly charged to either API.
-- Case order rotates each iteration to reduce persistent thermal and frequency bias. Warmups are excluded, raw samples remain in `perf-results/`.
+- Case order rotates each iteration to reduce persistent thermal and frequency bias. Warmups are excluded; raw samples are retained locally in the git-ignored `perf-results/` directory and are not part of the published branch.
 - Compiler optimization is maximal for measured target generation. SPIR-V uses direct emission followed by Slang's configured `spirv-opt` downstream path.
 - Runtime measurements exclude device, acceleration-structure, shader, pipeline, and shader-table/function-table creation. They measure steady-state dispatch only.
 - Correctness renders run before timing and are compared byte-for-byte within each platform lane.
