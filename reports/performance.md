@@ -4,7 +4,7 @@ Generated 2026-09-14T12:36:15-07:00 from 15 benchmark result file(s).
 
 Structural refresh runs: `Linux: 20260914-cdecb7503-linux-isolated-v2`, `Windows: 20260914-cdecb7503-structural-final`, `macOS: 20260914-cdecb7503-metal-pair-final`.
 
-This report compares the legacy D3D/Vulkan pipeline ray-tracing API with the revised schema-based API. Metal instead compares generated Slang output with an equivalent hand-written native Metal implementation.
+This report compares the legacy D3D/Vulkan/OptiX pipeline ray-tracing API with the revised schema-based API. Metal instead compares generated Slang output with an equivalent hand-written native Metal implementation.
 
 ## Structural refresh runner environments
 

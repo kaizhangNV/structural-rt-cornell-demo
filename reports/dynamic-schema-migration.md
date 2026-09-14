@@ -97,8 +97,8 @@ byte-identically to legacy; generated Metal is byte-identical to the hand-writte
 
 ## Validation provenance
 
-- Implementation and measured-results revision: `616893dab11a693b9a28608348ca77bf452efd3d` on
-  `codex/dynamic-schema-migration`.
+- Published implementation corresponding to the measured worktree snapshots:
+  `616893dab11a693b9a28608348ca77bf452efd3d` on `codex/dynamic-schema-migration`.
 - Compiler source: `cdecb75031c1ce125985e51032c00a11c1f85492`; Linux build tag
   `2026.17.1-156-gcdecb7503`.
 - Linux isolated run: `20260914-cdecb7503-linux-isolated-v2`.

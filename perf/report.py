@@ -450,7 +450,7 @@ def main() -> None:
         f"{len(results)} benchmark result file(s).",
         "",
         *run_lines,
-        "This report compares the legacy D3D/Vulkan pipeline ray-tracing API with the revised "
+        "This report compares the legacy D3D/Vulkan/OptiX pipeline ray-tracing API with the revised "
         "schema-based API. Metal instead compares generated Slang output with an equivalent hand-written "
         "native Metal implementation.",
         "",
