@@ -279,18 +279,17 @@ that cross compiler revisions.
 
 ## Files
 
-- `shaders/shared.slang`: imported module containing the two payloads, contexts, frame data, and
-  ray construction.
+- `shaders/shared.slang`: structural-only contexts, shadow payload, and ray construction.
 - `shaders/rt_pipeline.slang`: pipeline module and short table of contents that `__include`s the
   remaining shader files.
 - `shaders/hit.slang`: included primary and shadow closest-hit stages.
 - `shaders/miss.slang`: included primary and shadow miss stages.
 - `shaders/program_schema.slang`: included shader-program schema; it contains no SBT positions.
 - `shaders/raygen.slang`: included ray-generation entry point and structural trace adapters.
-- `shaders/path_tracing.slang`: shared integrator, materials, sampling, and display mapping;
-  textually `#include`d by both `shaders/raygen.slang` and `shaders-legacy/raygen.slang`.
-- `shaders/sphere_intersection.slang`: shared analytic sphere roots and custom hit attributes;
-  textually `#include`d by the structural and legacy `hit.slang` implementations.
+- `common/scene_types.slang`: shared scene/frame layouts, primary hit result, and sphere attributes.
+- `common/path_tracing.slang`: imported integrator, sampling, and display module. Each raygen
+  supplies an `ISceneTracer` adapter and explicitly passes frame data, buffers, and the first hit.
+- `common/sphere_intersection.slang`: imported analytic sphere intersection helpers.
 - `shaders-legacy/`: equivalent old-API Slang ray-generation, hit, and miss shaders.
 - `shaders/cornell-box-native.metal`: equivalent hand-written native Metal intersector baseline.
 - `scene.h`: shared Cornell-box geometry and surface data.
@@ -307,6 +306,11 @@ that cross compiler revisions.
 - `run-linux.sh`, `run-windows.ps1`, and `run-macos.sh`: local build-and-run helpers.
 - `perf/` and `run-perf-*`: reusable compile/runtime measurement tools, report generator, and
   platform orchestration scripts.
+
+Slang source must use native modules, not preprocessor `#include` or `.slangh` files. Both
+pipeline modules import the files in `common/`; `__include`/`implementing` still organize
+stage fragments within each pipeline module. C++ and native Metal header includes are unaffected.
+Run `python3 -m unittest discover -s tests -p 'test_*.py'` to check this rule and the validator.
 
 [demo-preview]: media/cornell-box-demo.gif
 [demo-video]: media/cornell-box-demo.webm?raw=true

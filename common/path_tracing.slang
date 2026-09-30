@@ -1,5 +1,14 @@
-// Textually included by both raygen.slang implementations, not imported as a module.
-// Traversal uses tracePrimary / traceOcclusion; material and sampling code is shared.
+module path_tracing;
+
+import "scene_types.slang";
+
+// Each pipeline supplies a concrete adapter; specialization resolves these calls statically.
+public interface ISceneTracer
+{
+    PrimaryPayload tracePrimary(float3 origin, float3 direction);
+    bool traceOcclusion(float3 origin, float3 direction, float distance);
+}
+
 static const float kPi = 3.14159265358979323846;
 static const float3 kLightEmission = float3(18.0, 16.0, 13.0);
 static const float3 kGlassAbsorption = float3(0.08, 0.025, 0.012);
@@ -50,9 +59,9 @@ float dielectricFresnel(float cosIncident, float etaIncident, float etaTransmitt
     return 0.5 * (rs * rs + rp * rp);
 }
 
-float3 traceAmbientOcclusion(float3 origin, float3 direction, inout uint state)
+float3 traceAmbientOcclusion<T : ISceneTracer>(
+    T tracer, FrameData frame, PrimaryPayload hit, float3 direction, inout uint state)
 {
-    PrimaryPayload hit = tracePrimary(origin, direction);
     if (hit.surfaceIndex == 0xffffffff)
         return float3(1.0);
     float3 normal = dot(direction, hit.normal) < 0.0 ? hit.normal : -hit.normal;
@@ -61,13 +70,15 @@ float3 traceAmbientOcclusion(float3 origin, float3 direction, inout uint state)
     for (uint sample = 0; sample < samples; ++sample)
     {
         float3 aoDirection = cosineHemisphere(normal, state);
-        visible += traceOcclusion(hit.hitPosition + normal * 0.002, aoDirection,
+        visible += tracer.traceOcclusion(hit.hitPosition + normal * 0.002, aoDirection,
             max(frame.aoRadius, 0.002)) ? 0.0 : 1.0;
     }
     return float3(visible / float(samples));
 }
 
-float3 tracePath(float3 origin, float3 direction, inout uint state)
+float3 tracePath<T : ISceneTracer>(
+    T tracer, FrameData frame, StructuredBuffer<Surface> surfaces,
+    PrimaryPayload firstHit, float3 origin, float3 direction, inout uint state)
 {
     float3 radiance = float3(0.0);
     float3 throughput = float3(1.0);
@@ -77,7 +88,11 @@ float3 tracePath(float3 origin, float3 direction, inout uint state)
     bool specularPath = true;
     for (uint bounce = 0; bounce < max(frame.maxBounces, 1u); ++bounce)
     {
-        PrimaryPayload hit = tracePrimary(origin, direction);
+        PrimaryPayload hit;
+        if (bounce == 0)
+            hit = firstHit;
+        else
+            hit = tracer.tracePrimary(origin, direction);
         if (hit.surfaceIndex == 0xffffffff)
         {
             radiance += throughput * float3(0.012, 0.015, 0.020);
@@ -140,7 +155,7 @@ float3 tracePath(float3 origin, float3 direction, inout uint state)
             float cosineSurface = max(dot(normal, lightDirection), 0.0);
             float cosineLight = max(lightDirection.y, 0.0);
             if (cosineSurface > 0.0 && cosineLight > 0.0 &&
-                !traceOcclusion(hit.hitPosition + normal * 0.002, lightDirection,
+                !tracer.traceOcclusion(hit.hitPosition + normal * 0.002, lightDirection,
                     max(lightDistance - 0.004, 0.001)))
             {
                 radiance += throughput * surface.albedo.xyz * kLightEmission *
@@ -167,7 +182,7 @@ float3 tracePath(float3 origin, float3 direction, inout uint state)
     return radiance;
 }
 
-uint packColor(float3 linearColor, bool bgra)
+uint packColor(float3 linearColor, bool bgra, FrameData frame)
 {
     float3 color = max(linearColor * max(frame.exposure, 0.0), float3(0.0));
     if (frame.viewMode != 1)
@@ -179,32 +194,47 @@ uint packColor(float3 linearColor, bool bgra)
                 : rgb.x | (rgb.y << 8) | (rgb.z << 16) | 0xff000000;
 }
 
-void renderPixel(uint2 pixel)
+public struct CameraSample
 {
-    if (pixel.x >= frame.imageSize.x || pixel.y >= frame.imageSize.y)
-        return;
+    public float3 origin;
+    public float3 direction;
+    public uint state;
+}
+
+public CameraSample makeCameraSample(uint2 pixel, uint sampleIndex, FrameData frame)
+{
+    CameraSample sample;
     uint pixelIndex = pixel.y * frame.imageSize.x + pixel.x;
-    float4 sum = frame.sampleOffset == 0 ? float4(0.0) : accumulation[pixelIndex];
-    uint sampleCount = max(frame.samplesPerFrame, 1u);
-    for (uint sample = 0; sample < sampleCount; ++sample)
-    {
-        uint state = hashSeed((pixelIndex + 1u) * 0x9e3779b9 ^
-            (frame.sampleOffset + sample + 1u) * 0x85ebca6b ^ frame.seed);
-        float jitterX = randomFloat(state);
-        float jitterY = randomFloat(state);
-        float2 ndc = (float2(pixel) + float2(jitterX, jitterY)) /
-            float2(frame.imageSize) * 2.0 - 1.0;
-        ndc.y = -ndc.y;
-        float aspect = float(frame.imageSize.x) / float(frame.imageSize.y);
-        float3 direction = normalize(frame.cameraForward.xyz +
-            frame.cameraRight.xyz * ndc.x * aspect * 0.62 +
-            frame.cameraUp.xyz * ndc.y * 0.62);
-        float3 value = frame.viewMode == 1
-            ? traceAmbientOcclusion(frame.cameraPosition.xyz, direction, state)
-            : tracePath(frame.cameraPosition.xyz, direction, state);
-        sum += float4(value, 1.0);
-    }
-    accumulation[pixelIndex] = sum;
+    sample.state = hashSeed((pixelIndex + 1u) * 0x9e3779b9 ^
+        (frame.sampleOffset + sampleIndex + 1u) * 0x85ebca6b ^ frame.seed);
+    float jitterX = randomFloat(sample.state);
+    float jitterY = randomFloat(sample.state);
+    float2 ndc = (float2(pixel) + float2(jitterX, jitterY)) /
+        float2(frame.imageSize) * 2.0 - 1.0;
+    ndc.y = -ndc.y;
+    float aspect = float(frame.imageSize.x) / float(frame.imageSize.y);
+    sample.origin = frame.cameraPosition.xyz;
+    sample.direction = normalize(frame.cameraForward.xyz +
+        frame.cameraRight.xyz * ndc.x * aspect * 0.62 +
+        frame.cameraUp.xyz * ndc.y * 0.62);
+    return sample;
+}
+
+// The pipeline supplies the real first hit. This also keeps structural trace reachable from
+// Metal raygen in eb5be680b's frontend, which does not follow generic interface witnesses.
+public float3 renderSample<T : ISceneTracer>(
+    T tracer, FrameData frame, StructuredBuffer<Surface> surfaces,
+    CameraSample sample, PrimaryPayload firstHit)
+{
+    return frame.viewMode == 1
+        ? traceAmbientOcclusion(tracer, frame, firstHit, sample.direction, sample.state)
+        : tracePath(tracer, frame, surfaces, firstHit, sample.origin, sample.direction, sample.state);
+}
+
+public void storePixel(uint2 pixel, FrameData frame, float4 sum,
+    RWStructuredBuffer<float4> accumulation, RWStructuredBuffer<uint> output)
+{
+    accumulation[pixel.y * frame.imageSize.x + pixel.x] = sum;
     output[pixel.y * frame.rowStride + pixel.x] =
-        packColor(sum.xyz / max(sum.w, 1.0), frame.outputBgra != 0);
+        packColor(sum.xyz / max(sum.w, 1.0), frame.outputBgra != 0, frame);
 }

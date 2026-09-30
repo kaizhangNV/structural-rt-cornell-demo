@@ -74,21 +74,25 @@ class ImageAndProvenanceTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "expected 3 bytes, got 2"):
                 validator.read_ppm(image)
 
-    def test_provenance_changes_with_renderer_or_procedural_shader(self):
+    def test_provenance_changes_with_renderer_or_common_shaders(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             renderer = root / "renderer"
             renderer.write_bytes(b"host version 1")
-            shader = root / "shaders" / "sphere_intersection.slang"
-            shader.parent.mkdir()
-            shader.write_text("intersection version 1", encoding="utf-8")
+            (root / "common").mkdir()
+            shaders = [root / "common" / name for name in
+                       ("sphere_intersection.slang", "path_tracing.slang", "scene_types.slang")]
+            for shader in shaders:
+                shader.write_text("shader version 1", encoding="utf-8")
             before = validator.input_provenance(root, renderer)
             renderer.write_bytes(b"host version 2")
-            shader.write_text("intersection version 2", encoding="utf-8")
+            for shader in shaders:
+                shader.write_text("shader version 2", encoding="utf-8")
             after = validator.input_provenance(root, renderer)
             self.assertNotEqual(before["renderer_sha256"], after["renderer_sha256"])
-            self.assertNotEqual(before["source_sha256"]["shaders/sphere_intersection.slang"],
-                                after["source_sha256"]["shaders/sphere_intersection.slang"])
+            for shader in shaders:
+                key = shader.relative_to(root).as_posix()
+                self.assertNotEqual(before["source_sha256"][key], after["source_sha256"][key])
 
 
 if __name__ == "__main__":

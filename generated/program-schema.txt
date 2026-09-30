@@ -1,6 +1,6 @@
 structural-ray-tracing-schema 3
 compiler "2026.19-151-geb5be680b" "eb5be680b597ae547abe1f8338f223896fceaca3"
-metal-source 64184 5885131627603143970
+metal-source 65711 6314247992848146113
 schema "ProgramSchema" 0 16 16 16 16
 payload 0 "PrimaryPayload" 0 1 2
 hit 0 0 "PrimaryHitGroup" "PrimaryClosestHit" "__slang_structural_rt_6d6574616c2e76317c636c6f736573744869747c31333a50726f6772616d536368656d617c307c31373a5072696d617279436c6f73657374486974" "" "" "" ""

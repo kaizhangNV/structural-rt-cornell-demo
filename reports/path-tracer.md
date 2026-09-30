@@ -12,9 +12,11 @@ absorption. An ambient-occlusion view makes nearby occluders visible.
 
 - Structural Slang, legacy Slang, and hand-written Metal render the same scene and integrator.
 - Structural and legacy Slang share the material/sampling implementation, with separate tracing
-  adapters. Both `raygen.slang` files textually include `shaders/path_tracing.slang` after
-  defining their tracing adapters; the shared source is not a separately imported module.
-  The intersection stages similarly include `shaders/sphere_intersection.slang`.
+  adapters implementing `ISceneTracer`. Both pipeline modules import `common/path_tracing.slang`,
+  `common/sphere_intersection.slang`, and `common/scene_types.slang`. The integrator takes explicit
+  frame data, resources, and the initial camera hit; the legacy adapter preserves its native
+  payload layout and converts its result to the common hit type. No Slang preprocessor includes
+  or `.slangh` files remain; CPU tests enforce this convention.
   This keeps their comparison focused on the ray-tracing API.
 - Ray generation iteratively traces multiple bounces. Closest-hit returns a position, distance,
   normal, and material index; a separate small payload serves shadow and AO rays.
@@ -139,20 +141,21 @@ and D3D12 in one; every differing channel is one byte apart. The
 same-backend gate is not applied to this cross-backend comparison. These
 observations are not a promise of bitwise portability or evidence of an API-lane regression.
 
-After renaming the shared sources to `.slang`, Vulkan and OptiX headless suites were rerun:
-all five pairs, seeded repeats, and timing smoke checks pass, with renders unchanged from the
-scene-v2 results. Structural/legacy DXIL and PTX compile to byte-identical pre-rename outputs;
-generated Metal changes only source-filename directives, with its paired fingerprint refreshed.
-Windows/macOS runtime checks above precede this filename-only change and were not rerun for it.
-Rename-check artifacts are in `build/slang-extension-validation-{vulkan,optix}/`.
+After moving the common code into imported modules, all four backend headless suites were rerun.
+All five pairs, seeded repeats, and timing smoke checks pass; every saved image is byte-identical
+to its same-platform pre-refactor scene-v2 counterpart. Structural/legacy DXIL and PTX compilation
+also passes. Compiled code is not byte-identical after the refactor, so this is a correctness
+result, not a compile-time or runtime-performance conclusion. Generated Metal and its paired
+fingerprint were refreshed. The convergence and high-sample media captures above predate this
+module-only refactor; interactive display was not rerun.
 
 Evidence locations (ignored build outputs are local artifacts):
 
-- Vulkan: `build/procedural-v2-validation-vulkan/validation.json`.
-- OptiX: `build/procedural-v2-validation-optix/validation.json`.
-- Metal: `build/procedural-v2-validation-macos/validation.json`, farm run
-  `structural-rt-cornell-pathtracer/20260930-134506` on Apple M4.
-- Windows: `build/procedural-v2-validation-windows/validation.json`, the same farm run,
+- Vulkan: `build/common-module-validation-vulkan/validation.json`.
+- OptiX: `build/common-module-validation-optix/validation.json`.
+- Metal: `build/common-module-validation-macos/validation.json`, farm run
+  `structural-rt-cornell-pathtracer/20260930-142135` on Apple M4.
+- Windows: `build/common-module-validation-windows/validation.json`, the same farm run,
   on NVIDIA RTX 3500 Ada Generation Laptop GPU. SSH connectivity checks and both workers
   passed on this rerun. No RDP or agent-side service change was used.
 
@@ -178,7 +181,7 @@ The validator now records `passed: false, status: running` before launching subp
 checkpoints completed headless results before window tests. A logout or interrupted process can
 no longer leave a previous successful `validation.json` looking like a pass for the new run.
 The CPU-only bookkeeping and safety tests run with
-`python3 -m unittest discover -s tests -p 'test_*.py'` (five tests pass).
+`python3 -m unittest discover -s tests -p 'test_*.py'` (eight tests pass, including shader-module rules).
 
 ### Images
 
@@ -225,8 +228,8 @@ light paths are sampled through the path's dielectric bounces and may converge s
 does not use caustic-focused sampling, denoising, spectral dispersion, or participating media.
 These are integrator choices, not evidence of missing ray-tracing API features.
 
-We found no new shader API design gap blocking these effects. Two implementation or
-integration issues are tracked below; neither requires changing the ray-tracing API design.
+We found no new shader API design gap blocking these effects. The implementation and
+integration issues below do not require changing the ray-tracing API design.
 
 ### Compiler capability checking in stage math
 
@@ -264,6 +267,29 @@ On Metal, both generated procedural intersection functions read the shared `surf
 at `[[buffer(1)]]`. The host binds it to the compute encoder **and** each intersection-function
 table. The native Metal baseline does the same. This is Metal's separate binding namespaces,
 not a shader API design gap or a restriction against resources in intersection programs.
+
+### Metal entry-point discovery through generic interfaces
+
+The module refactor exposed another compiler implementation limitation in `eb5be680b`:
+Metal rejects a raygen entry point with E36107 when its structural trace is reachable only
+through a generic interface call. The frontend call graph follows interface requirements,
+but does not resolve their concrete witnesses when deciding whether this is structural raygen.
+The same generic shader compiles to SPIR-V; a direct-call Metal control also compiles.
+
+The demo keeps the **actual initial camera-ray trace** in each raygen, then passes that hit into
+the shared `renderSample<T : ISceneTracer>` integrator. AO consumes it, path bounce zero reuses
+it, and subsequent bounces use the adapter. There are no dummy traces, extra per-sample rays,
+disabled checks, or compiler patches. Sampling and accumulation order are preserved.
+
+Minimal [reproducer](../tests/repros/module-generic-trace.slang) and
+[imported helper](../tests/repros/module-generic-trace-helper.slang):
+
+```bash
+slangc tests/repros/module-generic-trace.slang -experimental-feature \
+    -entry RayGeneration -stage raygeneration -target metal -capability metallib_3_1 \
+    -o /tmp/module-generic-trace.metal
+# Add -DDIRECT_TRACE=1 for the passing direct-call control.
+```
 
 ### Linux OptiX window presentation: RHI integration issue
 

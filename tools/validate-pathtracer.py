@@ -34,7 +34,7 @@ def input_provenance(root: Path, renderer: Path) -> dict:
         "scene.h", "render-settings.h", "rhi-main.cpp", "metal-main.cpp",
         "shaders/cornell-box-native.metal", "generated/cornell-box.metal",
         "generated/program-schema.txt")]
-    for directory in ("shaders", "shaders-legacy"):
+    for directory in ("common", "shaders", "shaders-legacy"):
         sources.extend((root / directory).glob("*.slang"))
     return {
         "renderer_sha256": file_sha256(renderer) if renderer.is_file() else None,

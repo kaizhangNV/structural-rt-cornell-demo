@@ -47,6 +47,13 @@ target_compile_features(cornell-render-settings-test PRIVATE cxx_std_17)
 enable_testing()
 add_test(NAME cornell-render-settings COMMAND cornell-render-settings-test)
 
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+    add_test(NAME cornell-shader-and-validator-rules
+        COMMAND "${Python3_EXECUTABLE}" -m unittest discover
+            -s "${CMAKE_CURRENT_SOURCE_DIR}/tests" -p "test_*.py")
+endif()
+
 add_executable(slang-compile-benchmark perf/slang-compile-benchmark.cpp)
 target_compile_features(slang-compile-benchmark PRIVATE cxx_std_17)
 target_link_libraries(slang-compile-benchmark PRIVATE slang)

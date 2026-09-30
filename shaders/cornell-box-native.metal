@@ -5,7 +5,7 @@ using namespace metal;
 using namespace metal::raytracing;
 
 // Hand-written reference implementation. Keep the integrator and RNG in step
-// with path_tracing.slang; traversal here uses Metal's native intersector.
+// with common/path_tracing.slang; traversal here uses Metal's native intersector.
 struct Surface
 {
     float4 normal;

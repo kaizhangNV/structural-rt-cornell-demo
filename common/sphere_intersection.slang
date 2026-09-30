@@ -1,4 +1,7 @@
-// Shared analytic geometry, textually included by both hit.slang implementations.
+module sphere_intersection;
+
+import "scene_types.slang";
+
 // eb5be680b's structural stage contract omits the cuda_sm_2_0 capability carried
 // by the standard math overloads. Select CUDA's native float sqrt explicitly;
 // this is the same operation, not an approximate replacement or disabled check.
@@ -12,7 +15,7 @@ float sphereSqrt(float value)
 }
 
 // The ray need not be normalized (instance transforms can change its length).
-bool sphereRoots(float3 origin, float3 direction, float4 sphere, out float2 roots)
+public bool sphereRoots(float3 origin, float3 direction, float4 sphere, out float2 roots)
 {
     roots = float2(0.0);
     float3 relativeOrigin = origin - sphere.xyz;
@@ -37,7 +40,7 @@ bool sphereRoots(float3 origin, float3 direction, float4 sphere, out float2 root
     return true;
 }
 
-SphereAttributes sphereAttributes(float3 origin, float3 direction, float distance, float4 sphere)
+public SphereAttributes sphereAttributes(float3 origin, float3 direction, float distance, float4 sphere)
 {
     SphereAttributes attributes;
     attributes.objectNormal = origin + distance * direction - sphere.xyz;

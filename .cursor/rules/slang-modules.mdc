@@ -1,0 +1,16 @@
+---
+description: Use native Slang modules rather than preprocessor shader includes
+globs: "**/*.slang,**/*.slangh"
+alwaysApply: false
+---
+
+# Shader modules
+
+- First-party Slang sources use `.slang`, never `.slangh`.
+- Do not use preprocessor `#include` in Slang sources, with either quoted or angle-bracket paths.
+- Put code reused by legacy and structural shaders in independent modules under `common/`.
+- Use `import "../common/path_tracing.slang";` for a shared module.
+- Use `__include` and `implementing` only for implementation fragments within one module.
+- Pass resources, frame data, and tracing adapters explicitly to common rendering code.
+- This rule does not ban C++ or native Metal header includes, or modify external dependencies.
+- Run `python3 -m unittest discover -s tests -p 'test_*.py'` to check this convention.
