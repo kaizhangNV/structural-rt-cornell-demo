@@ -212,70 +212,25 @@ repeatability, and visual-effect checks. Its tolerances and results are in the p
 
 ## Performance measurements
 
-The historical direct-lighting cross-platform results and their interpretation are in
-[reports/performance.md](reports/performance.md). The migration checklist and design-gap assessment
-are in [reports/dynamic-schema-migration.md](reports/dynamic-schema-migration.md).
+The current path-tracer results are in [reports/performance.md](reports/performance.md), with
+published raw timing samples and source fingerprints. The old direct-lighting measurements are
+preserved separately in [the historical report](reports/performance-direct-lighting-20260914.md).
+They are different workloads, not a before/after performance comparison.
 
-Those timings do **not** describe the new path tracer. Do not combine new path-tracing results
-with retained direct-lighting baselines. The legacy refresh scripts below preserve some old
-baseline JSON and regenerate that historical report; a new performance campaign must measure
-both implementations with identical path-tracing settings in a separate results directory.
-Runtime JSON now records spp, bounce limit, view, sphere, AO, exposure, and seed.
+Use [perf/README.md](perf/README.md) for cross-platform reproduction. `perf/collect.py` runs fresh,
+matched compile and runtime comparisons; it never reuses old legacy/native baselines. The default
+runtime workload is 512×512, eight samples per pixel, beauty and AO views, and six alternating
+API-pair rounds with ten warmups and fifty measured dispatches per process.
 
-Each platform script first renders both lanes and aborts unless their PPM files are byte-for-byte
-identical. It then runs five warmups and 50 measured iterations by default:
+Compilation separates inclusive Slang preparation/code-generation time from downstream
+`spirv-opt`, DXC, or NVRTC time using Slang's compiler API. Metal source generation and Apple's
+`newLibrary(source)` compilation are measured separately. GPU timings exclude setup, compilation,
+readback, and presentation; they are not interactive FPS or isolated API overhead.
 
-```bash
-# Linux: Slang→SPIR-V, spirv-opt, Vulkan GPU time, and OptiX GPU time
-SLANG_PERF_COMPILER_ROOT=/path/to/slang/build/Release ./run-perf-linux.sh
-
-# macOS: generated/hand-written MSL compilation and Metal GPU time
-METAL_CPP_DIR=/path/to/metal-cpp ./run-perf-macos.sh
-```
-
-```powershell
-# Windows: Slang→DXIL, DXC, and D3D12 GPU time
-./run-perf-windows.ps1 `
-    -SlangRepo C:/path/to/slang `
-    -SlangBuild C:/path/to/slang/build `
-    -Config Release
-```
-
-Override `PERF_WARMUP` and `PERF_ITERATIONS` on Linux/macOS, or `-Warmup` and `-Iterations` on
-Windows. Linux requires a Release compiler package containing the downstream `slang-glslang`
-plugin; the script rejects zero downstream time instead of silently reporting an invalid
-measurement. Raw JSON and correctness images go under the ignored `perf-results/` directory. To
-regenerate the checked-in report after collecting results, run:
-
-```bash
-python3 perf/report.py --input-dir perf-results --output reports/performance.md
-```
-
-Use the repeatable `--refresh-run "platform: run-id"` option when the results came from saved
-build-farm runs and should carry those run IDs into the report.
-
-The metrics have deliberately narrow boundaries:
-
-- `total_wall_ms` creates a fresh Slang session, loads and links the module, then extracts target
-  code. SPIR-V uses `getTargetCode`, MSL uses the ray-generation `getEntryPointCode`, and DXIL
-  extracts every entry point with `getEntryPointCode`, matching slang-rhi's D3D12 pipeline path.
-- `downstream_ms` is the delta from Slang's compiler timer. It measures `spirv-opt` for direct
-  SPIR-V generation and DXC for DXIL. `slang_ms` is total wall time minus that delta.
-- Metal downstream time is synchronous `MTLDevice::newLibrary(source)` wall time. Every sample adds
-  a clock-seeded unique trailing source comment to avoid persistent source-hash cache hits.
-- Runtime is steady-state GPU dispatch time only. Vulkan, OptiX, and D3D12 use timestamp queries
-  directly around `dispatchRays`; Metal uses the GPU start/end timestamps of a command buffer
-  containing one compute dispatch. Setup and pipeline compilation are excluded.
-
-`perf/slang-compile-benchmark.cpp` is reusable: each `--case` supplies an optional reflected schema
-name, `--entry` supplies ordinary roots such as ray generation, and `--legacy-entry` supplies only
-the explicit stages needed by old pipeline shaders. The tool discovers structural stages from the
-schema. `perf/metal-compile-benchmark.cpp` likewise accepts repeated named Metal source cases. Both emit the common
-`slang-ray-tracing-perf-v1` JSON schema consumed by `perf/report.py`.
-
-The refresh scripts write new structural-only result files and retain existing legacy/native
-baseline JSON. The report shows compiler/source provenance per compile row and labels comparisons
-that cross compiler revisions.
+The lower-level compile tools accept named cases and explicit/reflected stage lists. The runtime
+runner uses the renderer's existing benchmark CLI and checks correctness before timing. The
+earlier `run-perf-*` / `perf/report.py` structural-refresh workflow is historical; do not use it
+to generate a path-tracer report.
 
 ## Files
 

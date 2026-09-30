@@ -28,6 +28,7 @@ struct Case
     std::vector<double> wallSamples;
     std::vector<double> slangSamples;
     std::vector<double> downstreamSamples;
+    std::vector<std::string> entryPoints;
     size_t codeSize = 0;
 };
 
@@ -45,6 +46,8 @@ struct Options
     std::string output;
     std::string compilerLabel;
     std::string hostLabel;
+    std::string optixInclude;
+    std::string ptxArchitecture = "compute_75";
     uint32_t warmupCount = 3;
     uint32_t iterationCount = 20;
     std::vector<Case> cases;
@@ -120,6 +123,16 @@ Options parseOptions(int argc, char** argv)
             require(1);
             options.hostLabel = argv[++i];
         }
+        else if (std::strcmp(argv[i], "--optix-include") == 0)
+        {
+            require(1);
+            options.optixInclude = argv[++i];
+        }
+        else if (std::strcmp(argv[i], "--ptx-arch") == 0)
+        {
+            require(1);
+            options.ptxArchitecture = argv[++i];
+        }
         else if (std::strcmp(argv[i], "--warmup") == 0)
         {
             require(1);
@@ -164,8 +177,11 @@ Options parseOptions(int argc, char** argv)
             throw std::runtime_error(std::string("unknown argument: ") + argv[i]);
         }
     }
-    if (options.target != "spirv" && options.target != "dxil" && options.target != "metal")
-        throw std::runtime_error("--target must be spirv, dxil, or metal");
+    if (options.target != "spirv" && options.target != "dxil" && options.target != "metal" &&
+        options.target != "ptx")
+        throw std::runtime_error("--target must be spirv, dxil, metal, or ptx");
+    if (options.target == "ptx" && options.optixInclude.empty())
+        throw std::runtime_error("--target ptx requires --optix-include");
     if (options.output.empty() || options.cases.empty() || options.entries.empty())
         throw std::runtime_error(
             "--output, at least one --case, and at least one --entry are required");
@@ -180,6 +196,7 @@ struct CompileResult
     double slangMs = 0.0;
     double downstreamMs = 0.0;
     size_t codeSize = 0;
+    std::vector<std::string> entryPoints;
 };
 
 CompileResult compileOnce(
@@ -188,6 +205,7 @@ CompileResult compileOnce(
     const Case& benchmarkCase)
 {
     slang::CompilerOptionEntry targetOptions[3] = {};
+    std::string nvrtcArguments;
     uint32_t targetOptionCount = 0;
     targetOptions[targetOptionCount].name = slang::CompilerOptionName::Optimization;
     targetOptions[targetOptionCount].value.kind = slang::CompilerOptionValueKind::Int;
@@ -207,10 +225,20 @@ CompileResult compileOnce(
         targetOptions[targetOptionCount].value.kind = slang::CompilerOptionValueKind::Int;
         targetOptions[targetOptionCount++].value.intValue0 = int32_t(metal31);
     }
+    else if (options.target == "ptx")
+    {
+        nvrtcArguments = "-I" + options.optixInclude + "\n--gpu-architecture=" +
+                         options.ptxArchitecture + "\n";
+        targetOptions[targetOptionCount].name = slang::CompilerOptionName::DownstreamArgs;
+        targetOptions[targetOptionCount].value.kind = slang::CompilerOptionValueKind::String;
+        targetOptions[targetOptionCount].value.stringValue0 = "nvrtc";
+        targetOptions[targetOptionCount++].value.stringValue1 = nvrtcArguments.c_str();
+    }
 
     slang::TargetDesc target = {};
     target.format = options.target == "spirv"  ? SLANG_SPIRV
                     : options.target == "dxil" ? SLANG_DXIL
+                    : options.target == "ptx"  ? SLANG_PTX
                                                : SLANG_METAL;
     if (options.target == "spirv")
         target.profile = globalSession->findProfile("spirv_1_5");
@@ -343,9 +371,9 @@ CompileResult compileOnce(
     diagnostics.setNull();
     check(composed->link(linked.writeRef(), diagnostics.writeRef()), diagnostics, "link program");
     size_t codeSize = 0;
-    if (options.target == "dxil")
+    if (options.target == "dxil" || options.target == "ptx")
     {
-        // D3D12 consumes a separate DXIL library for each ray-tracing entry point, and
+        // D3D12/OptiX consume a separate library for each ray-tracing entry point, and
         // slang-rhi obtains those libraries through getEntryPointCode(). Measure that same
         // downstream path. Whole-target DXIL extraction is not supported by every DXC/Slang
         // configuration on Windows.
@@ -391,11 +419,15 @@ CompileResult compileOnce(
         throw std::runtime_error(
             "the requested downstream compiler did not report any elapsed time; "
             "check that its Slang plugin is built and discoverable");
+    std::vector<std::string> entryPoints;
+    for (const auto& entry : selectedEntries)
+        entryPoints.push_back(entry.name);
     return {
         wallMs,
         std::max(0.0, wallMs - downstreamMs),
         downstreamMs,
         codeSize,
+        std::move(entryPoints),
     };
 }
 
@@ -474,14 +506,30 @@ void writeOutput(const Options& options)
            << "  \"unit\": \"ms\",\n"
            << "  \"warmup_count\": " << options.warmupCount << ",\n"
            << "  \"sample_count\": " << options.iterationCount << ",\n"
+           << "  \"optimization\": \"maximal\",\n"
+           << "  \"profile\": \""
+           << (options.target == "spirv" ? "spirv_1_5"
+               : options.target == "dxil" ? "lib_6_6"
+               : options.target == "metal" ? "metallib_3_1"
+                                            : jsonEscape(options.ptxArchitecture))
+           << "\",\n"
+           << "  \"cache_policy\": \"one warm global session, fresh per-sample ISession; "
+              "no persistent shader cache configured; OS file/plugin caches not flushed\",\n"
+           << "  \"downstream_scope\": \""
+           << (options.target == "spirv" ? "in-process SPIR-V optimizer adapter call"
+               : options.target == "dxil" ? "sum of per-entry DXC adapter calls"
+               : options.target == "ptx" ? "sum of per-entry NVRTC adapter calls; no OptiX driver JIT"
+                                           : "none; output is Metal source")
+           << "\",\n"
            << "  \"measurement\": {\n"
            << "    \"total_wall_ms\": \"createSession through "
-           << (options.target == "dxil"    ? "all getEntryPointCode calls"
+           << (options.target == "dxil" || options.target == "ptx" ? "all getEntryPointCode calls"
                : options.target == "metal" ? "ray-generation getEntryPointCode"
                                             : "getTargetCode")
            << "\",\n"
            << "    \"downstream_ms\": \"Slang IGlobalSession downstream timer delta\",\n"
-           << "    \"slang_ms\": \"total wall time minus downstream timer delta\"\n"
+           << "    \"slang_ms\": \"total wall time minus downstream timer delta; inclusive "
+              "source loading, reflection, linking, and code generation residual\"\n"
            << "  },\n  \"cases\": [\n";
     for (size_t i = 0; i < options.cases.size(); ++i)
     {
@@ -489,7 +537,12 @@ void writeOutput(const Options& options)
         stream << "    {\n"
                << "      \"name\": \"" << jsonEscape(value.name) << "\",\n"
                << "      \"schema\": \"" << jsonEscape(value.schemaName) << "\",\n"
-               << "      \"code_size_bytes\": " << value.codeSize << ",\n";
+               << "      \"code_size_bytes\": " << value.codeSize << ",\n"
+               << "      \"entry_point_count\": " << value.entryPoints.size() << ",\n"
+               << "      \"entry_points\": [";
+        for (size_t j = 0; j < value.entryPoints.size(); ++j)
+            stream << (j == 0 ? "" : ", ") << "\"" << jsonEscape(value.entryPoints[j]) << "\"";
+        stream << "],\n";
         writeMetric(stream, "total_wall_ms", value.wallSamples, true);
         writeMetric(stream, "slang_ms", value.slangSamples, true);
         writeMetric(stream, "downstream_ms", value.downstreamSamples, false);
@@ -526,6 +579,7 @@ int run(int argc, char** argv)
             value.slangSamples.push_back(result.slangMs);
             value.downstreamSamples.push_back(result.downstreamMs);
             value.codeSize = result.codeSize;
+            value.entryPoints = result.entryPoints;
         }
     }
     writeOutput(options);

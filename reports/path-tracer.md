@@ -323,5 +323,6 @@ for the Linux window, or OptiX with `--headless`. Fixing and validating the RHI 
 path remains outside this shader extension; do not repeat the failing window test as a routine
 validation step. No compiler or RHI dependency was patched for this extension.
 
-Historical compile/runtime timings remain in `performance.md`; these image checks do not refresh
-those measurements.
+Fresh compile/runtime benchmarks are in [performance.md](performance.md). The image validation
+above is separate from those measurements; historical direct-lighting timings are preserved in
+[performance-direct-lighting-20260914.md](performance-direct-lighting-20260914.md).

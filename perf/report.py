@@ -39,6 +39,10 @@ def load_results(root: pathlib.Path) -> list[dict[str, Any]]:
             raise RuntimeError(f"cannot read benchmark result {path}: {error}") from error
         if result.get("schema") != SCHEMA:
             continue
+        if result.get("kind") == "runtime" and result.get("scene", "").startswith("cornell-procedural-"):
+            raise RuntimeError(
+                "This is a path-tracer result, not the historical direct-lighting workload. "
+                "Use perf/collect.py and perf/path-tracer-report.py in a fresh results directory.")
         result["_path"] = str(path)
         results.append(result)
     return results

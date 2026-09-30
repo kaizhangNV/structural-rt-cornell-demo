@@ -82,7 +82,8 @@ std::string errorMessage(NS::Error* error)
 
 double compileOnce(MTL::Device* device, const Case& value, uint64_t nonce)
 {
-    // A unique comment prevents any source-hash cache from turning measured samples into lookups.
+    // Avoid exact source-hash reuse. This does not disable compiler-service caches that ignore
+    // comments or cache lower-level intermediate results; this is not a guaranteed cold compile.
     const std::string source =
         value.source + "\n// slang-ray-tracing-perf nonce " + std::to_string(nonce) + "\n";
     auto sourceString = NS::String::string(source.c_str(), NS::UTF8StringEncoding);
@@ -155,7 +156,10 @@ void writeOutput(const Options& options, MTL::Device* device)
            << "  \"unit\": \"ms\",\n"
            << "  \"warmup_count\": " << options.warmupCount << ",\n"
            << "  \"sample_count\": " << options.iterationCount << ",\n"
-           << "  \"cache_control\": \"clock-seeded unique trailing source comment per sample\",\n"
+           << "  \"cache_control\": \"clock-seeded unique trailing source comment per sample; "
+              "backend caches are not flushed and cold compilation is not guaranteed\",\n"
+           << "  \"language_version\": \"Metal 3.1\",\n"
+           << "  \"excludes\": \"source file I/O, pipeline creation, and driver pipeline JIT\",\n"
            << "  \"cases\": [\n";
     for (size_t caseIndex = 0; caseIndex < options.cases.size(); ++caseIndex)
     {
