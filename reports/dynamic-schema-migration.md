@@ -1,5 +1,10 @@
 # Dynamic-schema migration report
 
+This report describes the original direct-lighting migration. The subsequent path-tracing,
+glass, and AO extension is documented in [path-tracer.md](path-tracer.md), including its new
+validation results and compiler workaround. Historical image hashes and payload sizes below
+belong to the original scene, not the extended renderer.
+
 ## Outcome
 
 The Cornell box now uses the revised shader schema and a host-owned SBT layout. Primary and shadow
@@ -97,6 +102,23 @@ byte-identically to legacy; generated Metal is byte-identical to the hand-writte
 
 ## Validation provenance
 
+### Latest PR compatibility
+
+The sample was refreshed and revalidated at Slang PR #12691 revision
+`eb5be680b597ae547abe1f8338f223896fceaca3`, paired with slang-rhi
+`acc98559009ac5f1cc16d3ffe008797cdfd0ace9`. The shader and host source already matched the latest
+schema API, so no source-level compatibility workaround was required. The generated Metal artifact
+is integrity-paired to a refreshed schema sidecar, which carries compiler tag
+`2026.19-151-geb5be680b`. Headless structural Vulkan and OptiX runs both produced checksum
+`777626b0f3ca5dd9` and were byte-identical to their legacy-API counterparts. A fresh Windows
+D3D12 build at the same Slang/slang-rhi tuple produced that checksum for both structural and legacy
+paths. On macOS, the generated structural Metal path and the hand-written native Metal path also
+produced that checksum and byte-identical images. Cross-platform evidence is in local-build-farm
+run `structural-rt-cornell-latest/20260929-141244`.
+
+The numbers in `reports/performance.md` remain historical measurements from the earlier compiler
+revision; they were not relabeled as measurements of the latest PR.
+
 - Published implementation corresponding to the measured worktree snapshots:
   `616893dab11a693b9a28608348ca77bf452efd3d` on `codex/dynamic-schema-migration`.
 - Compiler source: `cdecb75031c1ce125985e51032c00a11c1f85492`; Linux build tag
@@ -108,8 +130,9 @@ byte-identically to legacy; generated Metal is byte-identical to the hand-writte
 Post-measurement compiler validation: Slang revision
 `29969e72bacd308672b37e23a1b2ad7ea88c5ee2` scopes structural runtime checks to modules whose
 dependency closure imports `slang.raytracing` and adds focused module-visibility regression
-coverage. This compiler hardening was published after the Cornell measurements; the performance
-and correctness results above were not rerun and remain attributed to `cdecb75031c1`.
+coverage. This compiler hardening was published after the historical Cornell measurement campaign;
+those performance results remain attributed to `cdecb75031c1`. Current correctness results are the
+separate latest-PR compatibility runs reported above.
 
 Each performance lane used five warmups and 50 measured samples. Vulkan, OptiX, D3D12, and Metal
 all passed their byte-identical correctness gate.

@@ -3,7 +3,7 @@ implementing rt_pipeline;
 [shader("miss")]
 void PrimaryMiss(inout RayPayload payload)
 {
-    payload.hit = 0;
+    payload.surfaceIndex = 0xffffffff;
 }
 
 [shader("miss")]

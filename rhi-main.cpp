@@ -1,6 +1,7 @@
 #include "demo-window.h"
 #include "program-schema-reflection.h"
 #include "scene.h"
+#include "render-settings.h"
 
 #include <algorithm>
 #include <chrono>
@@ -132,8 +133,10 @@ void printDiagnostics(slang::IBlob* diagnostics)
 struct SceneResources
 {
     ComPtr<IBuffer> vertexBuffer;
+    ComPtr<IBuffer> sphereBoundsBuffer;
     ComPtr<IBuffer> instanceBuffer;
     ComPtr<IAccelerationStructure> bottomLevel;
+    ComPtr<IAccelerationStructure> sphereBottomLevel;
     ComPtr<IAccelerationStructure> topLevel;
 };
 
@@ -198,6 +201,46 @@ SceneResources buildScene(IDevice* device, ICommandQueue* queue, const cornell::
     check(queue->submit(commandEncoder->finish()), "build bottom-level acceleration structure");
     check(queue->waitOnHost(), "wait for bottom-level acceleration structure");
 
+    if (!data.sphereBounds.empty())
+    {
+        BufferDesc boundsDesc = {};
+        boundsDesc.size = data.sphereBounds.size() * sizeof(cornell::Aabb);
+        boundsDesc.usage = BufferUsage::AccelerationStructureBuildInput;
+        boundsDesc.defaultState = ResourceState::AccelerationStructureBuildInput;
+        scene.sphereBoundsBuffer = device->createBuffer(boundsDesc, data.sphereBounds.data());
+        if (!scene.sphereBoundsBuffer)
+            throw std::runtime_error("create procedural sphere bounds buffer");
+
+        AccelerationStructureBuildInput sphereInput = {};
+        sphereInput.type = AccelerationStructureBuildInputType::ProceduralPrimitives;
+        sphereInput.proceduralPrimitives.aabbBuffers[0] = scene.sphereBoundsBuffer;
+        sphereInput.proceduralPrimitives.aabbBufferCount = 1;
+        sphereInput.proceduralPrimitives.aabbStride = sizeof(cornell::Aabb);
+        sphereInput.proceduralPrimitives.primitiveCount = uint32_t(data.sphereBounds.size());
+        // Opaque suppresses any-hit, not the custom intersection program.
+        sphereInput.proceduralPrimitives.flags = AccelerationStructureGeometryFlags::Opaque;
+        AccelerationStructureBuildDesc sphereBuild = {};
+        sphereBuild.inputs = &sphereInput;
+        sphereBuild.inputCount = 1;
+        sphereBuild.flags = AccelerationStructureBuildFlags::PreferFastTrace;
+        AccelerationStructureSizes sphereSizes = {};
+        check(device->getAccelerationStructureSizes(sphereBuild, &sphereSizes),
+              "get procedural sphere acceleration-structure sizes");
+        auto scratch = createScratchBuffer(device, sphereSizes.scratchSize);
+        if (!scratch)
+            throw std::runtime_error("create procedural sphere scratch buffer");
+        AccelerationStructureDesc desc = {};
+        desc.kind = AccelerationStructureKind::BottomLevel;
+        desc.size = sphereSizes.accelerationStructureSize;
+        check(device->createAccelerationStructure(desc, scene.sphereBottomLevel.writeRef()),
+              "create procedural sphere acceleration structure");
+        commandEncoder = queue->createCommandEncoder();
+        commandEncoder->buildAccelerationStructure(
+            sphereBuild, scene.sphereBottomLevel, nullptr, scratch, 0, nullptr);
+        check(queue->submit(commandEncoder->finish()), "build procedural sphere acceleration structure");
+        check(queue->waitOnHost(), "wait for procedural sphere acceleration structure");
+    }
+
     AccelerationStructureInstanceDescGeneric instance = {};
     static const float kIdentityTransform[12] = {
         1.0f,
@@ -220,15 +263,24 @@ SceneResources buildScene(IDevice* device, ICommandQueue* queue, const cornell::
     instance.flags = AccelerationStructureInstanceFlags::TriangleFacingCullDisable;
     instance.accelerationStructure = scene.bottomLevel->getHandle();
 
+    std::vector<AccelerationStructureInstanceDescGeneric> instances = {instance};
+    if (scene.sphereBottomLevel)
+    {
+        instance.instanceID = data.sphereSurfaceIndex;
+        instance.instanceContributionToHitGroupIndex = cornell::kSphereInstanceOffset;
+        instance.accelerationStructure = scene.sphereBottomLevel->getHandle();
+        instances.push_back(instance);
+    }
+
     auto instanceType = getAccelerationStructureInstanceDescType(device);
     Size instanceStride = getAccelerationStructureInstanceDescSize(instanceType);
-    std::vector<uint8_t> nativeInstance(instanceStride);
+    std::vector<uint8_t> nativeInstance(instanceStride * instances.size());
     convertAccelerationStructureInstanceDescs(
-        1,
+        uint32_t(instances.size()),
         instanceType,
         nativeInstance.data(),
         instanceStride,
-        &instance,
+        instances.data(),
         sizeof(instance));
 
     BufferDesc instanceBufferDesc = {};
@@ -244,7 +296,7 @@ SceneResources buildScene(IDevice* device, ICommandQueue* queue, const cornell::
     instanceInput.type = AccelerationStructureBuildInputType::Instances;
     instanceInput.instances.instanceBuffer = scene.instanceBuffer;
     instanceInput.instances.instanceStride = uint32_t(instanceStride);
-    instanceInput.instances.instanceCount = 1;
+    instanceInput.instances.instanceCount = uint32_t(instances.size());
 
     AccelerationStructureBuildDesc topBuild = {};
     topBuild.inputs = &instanceInput;
@@ -284,13 +336,17 @@ ReflectedProgramSchema getLegacyProgramSchema()
 {
     ReflectedProgramSchema schema;
     schema.name = "LegacyProgram";
-    schema.maxNativeHitAttributeSize = sizeof(float) * 2;
+    schema.maxNativeHitAttributeSize = sizeof(float) * 3;
     ReflectedPayload payload;
     payload.typeName = "RayPayload";
     payload.nativePayloadSize = 64;
     payload.hitGroups = {
         {0, "PrimaryHitGroup", {"PrimaryClosestHit", "PrimaryClosestHit"}, {}, {}},
         {1, "ShadowHitGroup", {"ShadowClosestHit", "ShadowClosestHit"}, {}, {}},
+        {2, "PrimarySphereHitGroup", {"PrimarySphereClosestHit", "PrimarySphereClosestHit"}, {},
+         {"PrimarySphereIntersection", "PrimarySphereIntersection"}},
+        {3, "ShadowSphereHitGroup", {"ShadowSphereClosestHit", "ShadowSphereClosestHit"}, {},
+         {"ShadowSphereIntersection", "ShadowSphereIntersection"}},
     };
     payload.missShaders = {
         {0, "PrimaryMiss", {"PrimaryMiss", "PrimaryMiss"}},
@@ -478,15 +534,19 @@ ComPtr<IShaderTable> createShaderTable(
     const char* shadowPayload = legacy ? "RayPayload" : "ShadowPayload";
     const auto& primaryHit = findHitGroup(primaryPayload, "PrimaryHitGroup");
     const auto& shadowHit = findHitGroup(shadowPayload, "ShadowHitGroup");
+    const auto& primarySphereHit = findHitGroup(primaryPayload, "PrimarySphereHitGroup");
+    const auto& shadowSphereHit = findHitGroup(shadowPayload, "ShadowSphereHitGroup");
     const auto& primaryMiss = findMissShader(primaryPayload, "PrimaryMiss");
     const auto& shadowMiss = findMissShader(shadowPayload, "ShadowMiss");
 
     std::vector<const char*> missShaders(cornell::kShadowMissRecord + 1, "");
     missShaders[cornell::kPrimaryMissRecord] = primaryMiss.stage.entryPointName.c_str();
     missShaders[cornell::kShadowMissRecord] = shadowMiss.stage.entryPointName.c_str();
-    std::vector<const char*> hitGroups(cornell::kShadowHitRecord + 1, "");
+    std::vector<const char*> hitGroups(cornell::kShadowSphereHitRecord + 1, "");
     hitGroups[cornell::kPrimaryHitRecord] = primaryHit.typeName.c_str();
     hitGroups[cornell::kShadowHitRecord] = shadowHit.typeName.c_str();
+    hitGroups[cornell::kPrimarySphereHitRecord] = primarySphereHit.typeName.c_str();
+    hitGroups[cornell::kShadowSphereHitRecord] = shadowSphereHit.typeName.c_str();
 
     ShaderTableDesc desc = {};
     desc.program = program;
@@ -550,7 +610,8 @@ RenderResources createRenderer(
     const char* reflectionOutput,
     Backend backend,
     const char* optixIncludeDirectory,
-    RayTracingApi api)
+    RayTracingApi api,
+    const cornell::RenderSettings& settings)
 {
     const char* searchPaths[] = {shaderDirectory};
     slang::CompilerOptionEntry options[3] = {};
@@ -601,7 +662,7 @@ RenderResources createRenderer(
     if (!renderer.queue)
         throw std::runtime_error("get graphics queue");
 
-    auto sceneData = cornell::makeScene();
+    auto sceneData = cornell::makeScene(settings.sphereMode);
     renderer.scene = buildScene(renderer.device, renderer.queue, sceneData);
     auto loadedProgram = loadProgram(renderer.device, api);
     renderer.program = loadedProgram.shaderProgram;
@@ -636,9 +697,23 @@ ComPtr<IBuffer> createOutputBuffer(IDevice* device, Size size)
     return output;
 }
 
+ComPtr<IBuffer> createAccumulationBuffer(IDevice* device, uint32_t width, uint32_t height)
+{
+    BufferDesc desc = {};
+    desc.size = Size(width) * height * 4 * sizeof(float);
+    desc.elementSize = 4 * sizeof(float);
+    desc.usage = BufferUsage::UnorderedAccess;
+    desc.defaultState = ResourceState::UnorderedAccess;
+    auto buffer = device->createBuffer(desc);
+    if (!buffer)
+        throw std::runtime_error("create accumulation buffer");
+    return buffer;
+}
+
 void renderFrame(
     RenderResources& renderer,
     IBuffer* output,
+    IBuffer* accumulation,
     const cornell::FrameData& frame,
     ITexture* destination,
     Size rowPitch)
@@ -650,6 +725,7 @@ void renderFrame(
     check(root["scene"].setBinding(Binding(renderer.scene.topLevel)), "bind scene");
     check(root["surfaces"].setBinding(Binding(renderer.surfaces)), "bind surfaces");
     check(root["output"].setBinding(Binding(output)), "bind output");
+    check(root["accumulation"].setBinding(Binding(accumulation)), "bind accumulation");
     check(root["frame"].setData(frame), "set frame data");
     pass->dispatchRays(0, frame.imageSize[0], frame.imageSize[1], 1);
     pass->end();
@@ -676,17 +752,26 @@ int runHeadless(
     const char* reflectionOutput,
     Backend backend,
     const char* optixIncludeDirectory,
-    RayTracingApi api)
+    RayTracingApi api,
+    const cornell::RenderSettings& settings)
 {
     auto renderer =
-        createRenderer(shaderDirectory, reflectionOutput, backend, optixIncludeDirectory, api);
-    const uint32_t width = cornell::kImageWidth;
-    const uint32_t height = cornell::kImageHeight;
+        createRenderer(shaderDirectory, reflectionOutput, backend, optixIncludeDirectory, api, settings);
+    const uint32_t width = settings.width;
+    const uint32_t height = settings.height;
     const Size outputSize = Size(width) * height * sizeof(uint32_t);
     auto output = createOutputBuffer(renderer.device, outputSize);
+    auto accumulation = createAccumulationBuffer(renderer.device, width, height);
     cornell::Camera camera;
-    renderFrame(renderer, output, camera.makeFrame(width, height, width, false), nullptr, 0);
-    check(renderer.queue->waitOnHost(), "wait for ray tracing");
+    for (uint32_t offset = 0; offset < settings.samples;)
+    {
+        const uint32_t batch = std::min(8u, settings.samples - offset);
+        auto frame = camera.makeFrame(width, height, width, false);
+        settings.apply(frame, batch, offset);
+        renderFrame(renderer, output, accumulation, frame, nullptr, 0);
+        check(renderer.queue->waitOnHost(), "wait for ray tracing");
+        offset += batch;
+    }
 
     ComPtr<ISlangBlob> image;
     check(
@@ -702,6 +787,8 @@ int runHeadless(
         getApiName(api),
         outputPath,
         static_cast<unsigned long long>(imageChecksum(pixels, width, height)));
+    std::printf("%u spp, %u bounces, view %u, sphere %u, seed %u\n",
+                settings.samples, settings.bounces, settings.viewMode, settings.sphereMode, settings.seed);
     return 0;
 }
 
@@ -755,7 +842,8 @@ void writeRuntimeBenchmark(
     RayTracingApi api,
     uint32_t warmupCount,
     const std::vector<double>& samples,
-    IDevice* device)
+    IDevice* device,
+    const cornell::RenderSettings& settings)
 {
     const auto summary = summarizeSamples(samples);
     std::ofstream stream(path);
@@ -770,8 +858,18 @@ void writeRuntimeBenchmark(
            << "  \"device\": \"" << jsonEscape(device->getInfo().adapterName) << "\",\n"
            << "  \"metric\": \"GPU timestamp duration around one dispatch\",\n"
            << "  \"unit\": \"ms\",\n"
-           << "  \"width\": " << cornell::kImageWidth << ",\n"
-           << "  \"height\": " << cornell::kImageHeight << ",\n"
+           << "  \"width\": " << settings.width << ",\n"
+           << "  \"height\": " << settings.height << ",\n"
+           << "  \"samples_per_pixel\": " << settings.samples << ",\n"
+           << "  \"max_bounces\": " << settings.bounces << ",\n"
+           << "  \"view_mode\": " << settings.viewMode << ",\n"
+           << "  \"sphere_mode\": " << settings.sphereMode << ",\n"
+           << "  \"scene\": \"cornell-procedural-sphere-v1\",\n"
+           << "  \"sphere_geometry\": \"custom-intersection-aabb\",\n"
+           << "  \"seed\": " << settings.seed << ",\n"
+           << "  \"ao_samples\": " << settings.aoSamples << ",\n"
+           << "  \"ao_radius\": " << settings.aoRadius << ",\n"
+           << "  \"exposure\": " << settings.exposure << ",\n"
            << "  \"warmup_count\": " << warmupCount << ",\n"
            << "  \"sample_count\": " << samples.size() << ",\n"
            << "  \"summary\": {\"median\": " << summary.median << ", \"mean\": " << summary.mean
@@ -789,25 +887,30 @@ int runBenchmark(
     const char* optixIncludeDirectory,
     RayTracingApi api,
     uint32_t warmupCount,
-    uint32_t iterationCount)
+    uint32_t iterationCount,
+    const cornell::RenderSettings& settings)
 {
     if (!benchmarkOutput)
         throw std::runtime_error("--benchmark-output is required with --benchmark");
     if (iterationCount == 0)
         throw std::runtime_error("--iterations must be greater than zero");
 
-    auto renderer = createRenderer(shaderDirectory, nullptr, backend, optixIncludeDirectory, api);
+    auto renderer = createRenderer(shaderDirectory, nullptr, backend, optixIncludeDirectory, api, settings);
     if (!renderer.device->hasFeature(Feature::TimestampQuery) ||
         renderer.device->getInfo().timestampFrequency == 0)
         throw std::runtime_error("the selected device does not support timestamp queries");
 
-    const Size outputSize = Size(cornell::kImageWidth) * cornell::kImageHeight * sizeof(uint32_t);
+    const Size outputSize = Size(settings.width) * settings.height * sizeof(uint32_t);
     auto output = createOutputBuffer(renderer.device, outputSize);
+    auto accumulation = createAccumulationBuffer(renderer.device, settings.width, settings.height);
     cornell::Camera camera;
-    const auto frame =
-        camera.makeFrame(cornell::kImageWidth, cornell::kImageHeight, cornell::kImageWidth, false);
+    auto frame = camera.makeFrame(settings.width, settings.height, settings.width, false);
+    settings.apply(frame, settings.samples, 0);
     for (uint32_t i = 0; i < warmupCount; ++i)
-        renderFrame(renderer, output, frame, nullptr, 0);
+    {
+        renderFrame(renderer, output, accumulation, frame, nullptr, 0);
+        check(renderer.queue->waitOnHost(), "wait for benchmark warmup dispatch");
+    }
     check(renderer.queue->waitOnHost(), "wait for benchmark warmup");
 
     QueryPoolDesc queryDesc = {};
@@ -819,22 +922,24 @@ int runBenchmark(
         renderer.device->createQueryPool(queryDesc, queryPool.writeRef()),
         "create timestamp query pool");
 
-    auto commandEncoder = renderer.queue->createCommandEncoder();
-    auto pass = commandEncoder->beginRayTracingPass();
-    auto rootObject = pass->bindPipeline(renderer.pipeline, renderer.shaderTable);
-    ShaderCursor root(rootObject);
-    check(root["scene"].setBinding(Binding(renderer.scene.topLevel)), "bind scene");
-    check(root["surfaces"].setBinding(Binding(renderer.surfaces)), "bind surfaces");
-    check(root["output"].setBinding(Binding(output)), "bind output");
-    check(root["frame"].setData(frame), "set frame data");
     for (uint32_t i = 0; i < iterationCount; ++i)
     {
+        auto commandEncoder = renderer.queue->createCommandEncoder();
+        auto pass = commandEncoder->beginRayTracingPass();
+        auto rootObject = pass->bindPipeline(renderer.pipeline, renderer.shaderTable);
+        ShaderCursor root(rootObject);
+        check(root["scene"].setBinding(Binding(renderer.scene.topLevel)), "bind scene");
+        check(root["surfaces"].setBinding(Binding(renderer.surfaces)), "bind surfaces");
+        check(root["output"].setBinding(Binding(output)), "bind output");
+        check(root["accumulation"].setBinding(Binding(accumulation)), "bind accumulation");
+        check(root["frame"].setData(frame), "set frame data");
         pass->writeTimestamp(queryPool, i * 2);
-        pass->dispatchRays(0, cornell::kImageWidth, cornell::kImageHeight, 1);
+        pass->dispatchRays(0, settings.width, settings.height, 1);
         pass->writeTimestamp(queryPool, i * 2 + 1);
+        pass->end();
+        check(renderer.queue->submit(commandEncoder->finish()), "submit benchmark dispatches");
+        check(renderer.queue->waitOnHost(), "wait for benchmark dispatch");
     }
-    pass->end();
-    check(renderer.queue->submit(commandEncoder->finish()), "submit benchmark dispatches");
 
     std::vector<uint64_t> timestamps(iterationCount * 2);
     check(
@@ -846,7 +951,7 @@ int runBenchmark(
     for (uint32_t i = 0; i < iterationCount; ++i)
         samples[i] = double(timestamps[i * 2 + 1] - timestamps[i * 2]) / ticksPerMillisecond;
 
-    writeRuntimeBenchmark(benchmarkOutput, backend, api, warmupCount, samples, renderer.device);
+    writeRuntimeBenchmark(benchmarkOutput, backend, api, warmupCount, samples, renderer.device, settings);
     const auto summary = summarizeSamples(samples);
     std::printf(
         "%s/%s GPU dispatch: median %.6f ms, p95 %.6f ms (%u samples)\n",
@@ -864,11 +969,21 @@ int runInteractive(
     const char* reflectionOutput,
     Backend backend,
     const char* optixIncludeDirectory,
-    RayTracingApi api)
+    RayTracingApi api,
+    const cornell::RenderSettings& settings)
 {
+#if defined(__linux__)
+    // The CUDA/Vulkan presentation bridge coincided with an NVIDIA Xorg driver crash
+    // during validation. Do not reopen this path on a user's desktop until isolated.
+    if (backend == Backend::OptiX)
+        throw std::runtime_error(
+            "OptiX interactive presentation is temporarily disabled on Linux after an Xorg "
+            "driver crash. Use --backend vulkan for interactive rendering, or --headless "
+            "with --backend optix. See reports/path-tracer.md.");
+#endif
     DemoWindow window("Structural ray-tracing Cornell box", 960, 720);
     auto renderer =
-        createRenderer(shaderDirectory, reflectionOutput, backend, optixIncludeDirectory, api);
+        createRenderer(shaderDirectory, reflectionOutput, backend, optixIncludeDirectory, api, settings);
 #if defined(_WIN32)
     const auto windowHandle = WindowHandle::fromHwnd(window.nativeWindow());
 #elif defined(__APPLE__)
@@ -891,8 +1006,12 @@ int runInteractive(
     uint32_t configuredHeight = 0;
     Size rowPitch = 0;
     ComPtr<IBuffer> output;
+    ComPtr<IBuffer> accumulation;
+    uint32_t accumulatedSamples = 0;
     cornell::Camera camera;
     auto previousTime = std::chrono::steady_clock::now();
+    auto titleTime = previousTime;
+    uint32_t titleFrames = 0;
     std::printf("WASD move, Q/E move vertically, left-drag looks, Escape quits.\n");
 
     WindowInput input = {};
@@ -904,6 +1023,9 @@ int runInteractive(
             std::min(std::chrono::duration<float>(currentTime - previousTime).count(), 0.05f);
         previousTime = currentTime;
         const float speed = 1.5f * deltaTime;
+        if (input.forward != input.backward || input.right != input.left || input.up != input.down ||
+            input.mouseDeltaX != 0 || input.mouseDeltaY != 0)
+            accumulatedSamples = 0;
         camera.move(
             (float(input.forward) - float(input.backward)) * speed,
             (float(input.right) - float(input.left)) * speed,
@@ -918,6 +1040,7 @@ int runInteractive(
 
         if (configuredWidth != width || configuredHeight != height)
         {
+            check(renderer.queue->waitOnHost(), "wait before resize");
             configuredWidth = width;
             configuredHeight = height;
             SurfaceConfig config = {};
@@ -930,22 +1053,46 @@ int runInteractive(
             rowPitch = (Size(configuredWidth) * sizeof(uint32_t) + rowAlignment - 1) /
                        rowAlignment * rowAlignment;
             output = createOutputBuffer(renderer.device, rowPitch * configuredHeight);
+            accumulation = createAccumulationBuffer(renderer.device, configuredWidth, configuredHeight);
+            accumulatedSamples = 0;
         }
 
         auto target = surface->acquireNextImage();
         if (!target)
             continue;
+        auto frame = camera.makeFrame(configuredWidth, configuredHeight, uint32_t(rowPitch / 4), bgra);
+        settings.apply(frame, 1, accumulatedSamples);
         renderFrame(
             renderer,
             output,
-            camera.makeFrame(configuredWidth, configuredHeight, uint32_t(rowPitch / 4), bgra),
+            accumulation,
+            frame,
             target,
             rowPitch);
         check(surface->present(), "present frame");
-        if (maximumFrames != 0 && ++frameCount >= maximumFrames)
+        check(renderer.queue->waitOnHost(), "wait for progressive frame");
+        ++accumulatedSamples;
+        ++titleFrames;
+        const auto titleNow = std::chrono::steady_clock::now();
+        const double titleSeconds = std::chrono::duration<double>(titleNow - titleTime).count();
+        if (titleSeconds >= 0.5)
+        {
+            char title[192];
+            std::snprintf(title, sizeof(title), "Cornell path tracer | %s/%s | %.1f FPS | %u spp",
+                          getBackendName(backend), getApiName(api), titleFrames / titleSeconds, accumulatedSamples);
+            window.setTitle(title);
+            titleFrames = 0;
+            titleTime = titleNow;
+        }
+        ++frameCount;
+        if (maximumFrames != 0 && frameCount >= maximumFrames)
             break;
     }
     check(renderer.queue->waitOnHost(), "wait for final frame");
+    std::printf("%s/%s completed %u interactive frames (requested %u)\n",
+                getBackendName(backend), getApiName(api), frameCount, maximumFrames);
+    if (maximumFrames != 0 && frameCount < maximumFrames)
+        throw std::runtime_error("window closed before requested interactive frames completed");
     return 0;
 }
 
@@ -967,6 +1114,7 @@ int main(int argc, char** argv)
         const char* optixIncludeDirectory = nullptr;
         Backend backend = Backend::Vulkan;
         RayTracingApi api = RayTracingApi::Structural;
+        cornell::RenderSettings settings;
         for (int i = 2; i < argc; ++i)
         {
             if (std::strcmp(argv[i], "--headless") == 0)
@@ -991,6 +1139,8 @@ int main(int argc, char** argv)
                 reflectionOutput = argv[++i];
             else if (std::strcmp(argv[i], "--optix-include") == 0 && i + 1 < argc)
                 optixIncludeDirectory = argv[++i];
+            else if (cornell::parseRenderArgument(argc, argv, i, settings))
+            {}
             else
                 throw std::runtime_error(std::string("unknown argument: ") + argv[i]);
         }
@@ -1004,21 +1154,24 @@ int main(int argc, char** argv)
                 optixIncludeDirectory,
                 api,
                 warmupCount,
-                iterationCount);
+                iterationCount,
+                settings);
         return headless ? runHeadless(
                               shaderDirectory,
                               outputPath,
                               reflectionOutput,
                               backend,
                               optixIncludeDirectory,
-                              api)
+                              api,
+                              settings)
                         : runInteractive(
                               shaderDirectory,
                               maximumFrames,
                               reflectionOutput,
                               backend,
                               optixIncludeDirectory,
-                              api);
+                              api,
+                              settings);
     }
     catch (const std::exception& error)
     {

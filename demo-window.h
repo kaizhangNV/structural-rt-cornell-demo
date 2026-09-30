@@ -104,6 +104,8 @@ public:
         height = uint32_t(std::max(framebufferHeight, 0));
     }
 
+    void setTitle(const char* title) { glfwSetWindowTitle(m_window, title); }
+
 #if defined(__APPLE__)
     void* nativeWindow() const { return glfwGetCocoaWindow(m_window); }
 #elif defined(_WIN32)

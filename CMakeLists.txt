@@ -42,6 +42,11 @@ add_executable(structural-rt-cornell-rhi rhi-main.cpp)
 target_compile_features(structural-rt-cornell-rhi PRIVATE cxx_std_17)
 target_link_libraries(structural-rt-cornell-rhi PRIVATE glfw slang-rhi)
 
+add_executable(cornell-render-settings-test tests/render-settings-test.cpp)
+target_compile_features(cornell-render-settings-test PRIVATE cxx_std_17)
+enable_testing()
+add_test(NAME cornell-render-settings COMMAND cornell-render-settings-test)
+
 add_executable(slang-compile-benchmark perf/slang-compile-benchmark.cpp)
 target_compile_features(slang-compile-benchmark PRIVATE cxx_std_17)
 target_link_libraries(slang-compile-benchmark PRIVATE slang)

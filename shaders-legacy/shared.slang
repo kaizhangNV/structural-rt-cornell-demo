@@ -7,15 +7,23 @@ public struct Surface
 {
     public float4 normal;
     public float4 albedo;
+    public float4 emission;
+    public float4 parameters;
+    public float4 sphere;
+}
+
+public struct SphereAttributes
+{
+    public float3 objectNormal;
 }
 
 [raypayload]
 public struct RayPayload
 {
     public float3 hitPosition : read(caller) : write(caller, closesthit, miss);
+    public float distance : read(caller) : write(caller, closesthit, miss);
     public float3 normal : read(caller) : write(caller, closesthit, miss);
-    public float3 albedo : read(caller) : write(caller, closesthit, miss);
-    public uint hit : read(caller) : write(caller, closesthit, miss);
+    public uint surfaceIndex : read(caller) : write(caller, closesthit, miss);
     public uint occluded : read(caller) : write(caller, closesthit, miss);
 }
 
@@ -34,6 +42,14 @@ public struct FrameData
     public uint primaryMissRecord;
     public uint shadowHitRecord;
     public uint shadowMissRecord;
+    public uint samplesPerFrame;
+    public uint sampleOffset;
+    public uint maxBounces;
+    public uint viewMode;
+    public float exposure;
+    public float aoRadius;
+    public uint aoSamples;
+    public uint seed;
 }
 
 public RayDesc makeRay(float3 origin, float3 direction, float tMax)

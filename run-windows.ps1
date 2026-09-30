@@ -12,7 +12,19 @@ param(
     [uint32] $Warmup = 10,
     [uint32] $Iterations = 100,
     [string] $Output = "",
-    [uint32] $Frames = 0
+    [uint32] $Frames = 0,
+    [uint32] $Samples = 64,
+    [uint32] $Bounces = 8,
+    [ValidateSet("beauty", "ao", "direct")]
+    [string] $View = "beauty",
+    [ValidateSet("glass", "diffuse", "none")]
+    [string] $Sphere = "glass",
+    [uint32] $Width = 256,
+    [uint32] $Height = 256,
+    [uint32] $Seed = 1,
+    [uint32] $AoSamples = 8,
+    [float] $AoRadius = 0.5,
+    [float] $Exposure = 1.0
 )
 
 $ErrorActionPreference = "Stop"
@@ -48,7 +60,13 @@ if ($LASTEXITCODE -ne 0) {
 $Arguments = @(
     (Join-Path $PSScriptRoot $(if ($Api -eq "legacy") { "shaders-legacy" } else { "shaders" })),
     "--backend", "d3d12",
-    "--api", $Api
+    "--api", $Api,
+    "--samples", $Samples, "--bounces", $Bounces,
+    "--view", $View, "--sphere", $Sphere,
+    "--width", $Width, "--height", $Height, "--seed", $Seed,
+    "--ao-samples", $AoSamples,
+    "--ao-radius", $AoRadius.ToString([System.Globalization.CultureInfo]::InvariantCulture),
+    "--exposure", $Exposure.ToString([System.Globalization.CultureInfo]::InvariantCulture)
 )
 if ($Headless) {
     $Arguments += "--headless"

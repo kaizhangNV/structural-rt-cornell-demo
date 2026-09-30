@@ -1,0 +1,45 @@
+// Shared analytic geometry for structural and legacy intersection stages.
+// eb5be680b's structural stage contract omits the cuda_sm_2_0 capability carried
+// by the standard math overloads. Select CUDA's native float sqrt explicitly;
+// this is the same operation, not an approximate replacement or disabled check.
+float sphereSqrt(float value)
+{
+    __target_switch
+    {
+    case cuda: __intrinsic_asm "sqrtf";
+    default: return sqrt(value);
+    }
+}
+
+// The ray need not be normalized (instance transforms can change its length).
+bool sphereRoots(float3 origin, float3 direction, float4 sphere, out float2 roots)
+{
+    roots = float2(0.0);
+    float3 relativeOrigin = origin - sphere.xyz;
+    float a = direction.x * direction.x + direction.y * direction.y + direction.z * direction.z;
+    float halfB = relativeOrigin.x * direction.x + relativeOrigin.y * direction.y + relativeOrigin.z * direction.z;
+    float c = relativeOrigin.x * relativeOrigin.x + relativeOrigin.y * relativeOrigin.y +
+        relativeOrigin.z * relativeOrigin.z - sphere.w * sphere.w;
+    float discriminant = halfB * halfB - a * c;
+    if (a <= 0.0 || sphere.w <= 0.0 || discriminant < 0.0)
+        return false;
+    float rootDiscriminant = sphereSqrt(discriminant);
+    // Avoid cancellation in one quadratic root, then obtain the other via their product.
+    float q = -halfB - (halfB >= 0.0 ? rootDiscriminant : -rootDiscriminant);
+    if (q == 0.0)
+        roots = float2(-halfB / a);
+    else
+    {
+        float t0 = q / a;
+        float t1 = c / q;
+        roots = t0 < t1 ? float2(t0, t1) : float2(t1, t0);
+    }
+    return true;
+}
+
+SphereAttributes sphereAttributes(float3 origin, float3 direction, float distance, float4 sphere)
+{
+    SphereAttributes attributes;
+    attributes.objectNormal = origin + distance * direction - sphere.xyz;
+    return attributes;
+}

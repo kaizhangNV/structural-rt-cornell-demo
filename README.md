@@ -1,12 +1,15 @@
 # Structural ray-tracing Cornell box
 
-This is a standalone smoke demo for the structural ray-tracing API. It is intentionally outside
+This is a standalone path-tracing demo for the structural ray-tracing API. It is intentionally outside
 the Slang Git worktree and does not use `examples/example-base`.
 
-The shader traces one primary ray per pixel. `PrimaryClosestHit` returns the surface data needed
-for diffuse direct lighting, after which ray generation traces one ray toward a point light. The
-shadow ray maps to `ShadowClosestHit` and `ShadowMiss`, producing a binary visibility result. There
-is no path-tracing or accumulation loop.
+The shader progressively accumulates multi-bounce diffuse lighting from a ceiling area light.
+A small glass sphere floats at the room's center and adds Fresnel reflection, refraction,
+total internal reflection, absorption, shadows, and refractive caustics. It is an analytic
+procedural sphere: AABB traversal invokes custom intersection programs, not a triangle mesh.
+A separate ambient-occlusion view shows finite-radius visibility. The path loop runs
+in ray generation; closest-hit returns surface data, and a small second payload handles shadow
+and AO rays. See [the path-tracer report](reports/path-tracer.md) for validation and API findings.
 
 The repository also contains equivalent baselines for performance work: the legacy Slang
 `TraceRay` pipeline API under `shaders-legacy/`, and a hand-written native Metal implementation in
@@ -14,17 +17,30 @@ The repository also contains equivalent baselines for performance work: the lega
 
 ## Video
 
-[![Cornell box ray-tracing demo][demo-preview]][demo-video]
+[![Cornell path tracer: glass, indirect lighting, and ambient occlusion][demo-preview]][demo-video]
 
-Click the image to play the three-second screen recording with a small interactive camera pan.
+Click the animated preview to play the updated 20-second video. It shows real headless Vulkan renders:
+sample convergence, glass reflection/refraction, indirect versus direct-only lighting, and AO.
+This is an edited offline showcase, **not** a real-time performance recording.
+
+Full-resolution stills: [beauty, 4096 spp / eight bounces](media/cornell-pathtracer-beauty.png)
+and [AO diagnostic](media/cornell-pathtracer-ao.png). Validation and reproduction commands are in
+[the path-tracer report](reports/path-tracer.md).
+
+To regenerate the video after building the Linux renderer, run
+`python3 tools/render-readme-video.py --ffmpeg /path/to/ffmpeg` (requires Pillow, FFmpeg/libvpx,
+and DejaVu Sans fonts). Captures and their command/hash manifest stay under `build/readme-video/`.
 
 `ProgramSchema` declares which hit, miss, and callable programs are available, but it does not
-declare an SBT layout. The host deliberately places primary records at physical index 1 and shadow
-records at index 4, leaving holes. It passes those selectors in `FrameData`. The structural shader
-uses distinct `PrimaryPayload` and `ShadowPayload` partitions; each partition independently
-reflects hit and miss function index 0.
+declare an SBT layout. The host deliberately places triangle primary/shadow records at physical
+indices 1/4 and sphere primary/shadow records at 9/12, leaving holes. The sphere instance adds
+an SBT contribution of 8 to the selectors in `FrameData`. The structural shader uses distinct
+`PrimaryPayload` and `ShadowPayload` partitions, each with triangle and procedural hit groups.
 
-The scene is built from opaque triangles: five Cornell-box walls and two interior boxes. GLFW owns
+Five Cornell-box walls, two interior boxes, and a ceiling light use triangles. The sphere has
+one AABB, center `(0, 1, 0)`, and radius `0.3` in a 2×2×2 room. Its intersection shader solves
+the ray/sphere quadratic and reports the hit distance plus custom normal attributes. The path
+integrator implements glass reflection/refraction. GLFW owns
 the window and input on every platform; it is included as the `external/glfw` submodule. The Linux
 host supports slang-rhi/Vulkan and slang-rhi/OptiX, the Windows host uses slang-rhi/D3D12, and the
 macOS host presents directly with Metal-cpp.
@@ -42,9 +58,38 @@ The default mode is interactive:
 - Left mouse drag: look around.
 - Escape: close the window.
 
+The window title shows FPS and accumulated samples per pixel (spp). The interactive view adds one
+sample per frame and resets accumulation when the camera moves or the window resizes.
+
+## Rendering controls
+
+Headless defaults are 256×256, 64 spp, eight bounces, and a glass sphere. For a cleaner image:
+
+```bash
+./run-linux.sh --headless --samples 1024 --width 512 --height 512 --output cornell-path.ppm
+./run-linux.sh --view ao --ao-radius 0.75
+```
+
+Linux/macOS accept `--samples`, `--bounces`, `--view beauty|ao|direct`,
+`--sphere glass|diffuse|none`, `--ao-radius`, `--ao-samples`, `--seed`, and `--exposure`.
+`--width`/`--height` set headless and benchmark size; interactive windows start at 960×720.
+`--samples` sets the headless total or samples per benchmark dispatch; interactive mode keeps
+accumulating until stopped. Windows exposes the corresponding PowerShell parameters, for example:
+
+```powershell
+./run-windows.ps1 -SlangRepo C:/path/to/slang -Config Release `
+    -Headless -Samples 1024 -Width 512 -Height 512 -View beauty -Sphere glass
+```
+
+AO is a diagnostic view, not an extra multiplier on physically traced beauty lighting. The
+renderer has no denoiser; glass caustics need more samples. Direct-light visibility rays treat
+glass as an occluder, while paths through glass can still sample caustics stochastically.
+
 ## Linux: slang-rhi with Vulkan or OptiX
 
-The default paths point at `../another-slang-rt-integration` and its Release build:
+Without overrides, the runner uses a sibling `../slang` checkout when present, then falls back to
+the historical `../another-slang-rt-integration` development checkout. It uses that checkout's
+Release build:
 
 ```bash
 ./run-linux.sh
@@ -58,6 +103,9 @@ SLANG_BUILD=/path/to/slang/build \
 SLANG_CONFIG=Release \
 ./run-linux.sh
 ```
+
+Native builds use at most eight parallel jobs by default. Set `NATIVE_BUILD_JOBS` to use a smaller
+limit; the scripts do not depend on any workstation-specific build wrapper.
 
 For a deterministic headless render instead:
 
@@ -73,15 +121,20 @@ Select the legacy API with the same host and scene:
 ./run-linux.sh --api legacy --backend vulkan
 ```
 
-Select OptiX with the same host and host-owned record layout:
+Select headless OptiX with the same host and host-owned record layout:
 
 ```bash
-./run-linux.sh --backend optix
 ./run-linux.sh --backend optix --headless
 ```
 
 The headless command writes `cornell-box-optix.ppm`. The helper supplies NVRTC with the OptiX
 headers from the selected Slang worktree.
+
+Linux OptiX interactive presentation is temporarily disabled: a repeated window test crashed
+Xorg inside NVIDIA's display driver during surface configuration, before the first tracing frame.
+Headless OptiX rendering and benchmarking pass; use
+Vulkan for the Linux interactive window. This unresolved presentation issue is separate from
+the shader API and is documented in the path-tracer report.
 
 The slang-rhi host calls `findTraceProgramSchema("ProgramSchema")`. It uses reflected payload and
 attribute ABI sizes for pipeline creation, then resolves each physical record by the pair
@@ -152,14 +205,21 @@ The Metal host reads this sidecar and separately builds the host-owned physical 
 manifest also fingerprints the generated MSL so stale or mismatched artifact pairs fail before
 pipeline compilation. It is generated ABI data, not a second shader-side SBT declaration.
 
-With the current compiler and scene, every headless backend produces checksum
-`777626b0f3ca5dd9`.
+The previous direct-lighting scene's checksum does not apply to the path tracer. Use
+`tools/validate-pathtracer.py` for same-backend structural/reference comparisons, seeded
+repeatability, and visual-effect checks. Its tolerances and results are in the path-tracer report.
 
 ## Performance measurements
 
-The current cross-platform results and their interpretation are in
+The historical direct-lighting cross-platform results and their interpretation are in
 [reports/performance.md](reports/performance.md). The migration checklist and design-gap assessment
 are in [reports/dynamic-schema-migration.md](reports/dynamic-schema-migration.md).
+
+Those timings do **not** describe the new path tracer. Do not combine new path-tracing results
+with retained direct-lighting baselines. The legacy refresh scripts below preserve some old
+baseline JSON and regenerate that historical report; a new performance campaign must measure
+both implementations with identical path-tracing settings in a separate results directory.
+Runtime JSON now records spp, bounce limit, view, sphere, AO, exposure, and seed.
 
 Each platform script first renders both lanes and aborts unless their PPM files are byte-for-byte
 identical. It then runs five warmups and 50 measured iterations by default:
@@ -225,10 +285,15 @@ that cross compiler revisions.
 - `shaders/hit.slang`: included primary and shadow closest-hit stages.
 - `shaders/miss.slang`: included primary and shadow miss stages.
 - `shaders/program_schema.slang`: included shader-program schema; it contains no SBT positions.
-- `shaders/raygen.slang`: included ray-generation entry point and direct-lighting orchestration.
+- `shaders/raygen.slang`: included ray-generation entry point and structural trace adapters.
+- `shaders/path_tracing.slangh`: shared Slang integrator, materials, sampling, and display mapping.
+- `shaders/sphere_intersection.slangh`: shared analytic sphere roots and custom hit attributes.
 - `shaders-legacy/`: equivalent old-API Slang ray-generation, hit, and miss shaders.
 - `shaders/cornell-box-native.metal`: equivalent hand-written native Metal intersector baseline.
 - `scene.h`: shared Cornell-box geometry and surface data.
+- `render-settings.h`: common validated rendering options and frame ABI setup.
+- `tools/validate-pathtracer.py`: deterministic image comparisons and feature/convergence checks.
+- `tools/render-readme-video.py`: reproducible headless capture and README video encoding.
 - `demo-window.h`: shared GLFW window, input, and native-window access.
 - `rhi-main.cpp`: shared Vulkan, OptiX, and D3D12 slang-rhi host with interactive and headless
   modes.
@@ -241,4 +306,4 @@ that cross compiler revisions.
   platform orchestration scripts.
 
 [demo-preview]: media/cornell-box-demo.gif
-[demo-video]: https://raw.githubusercontent.com/kaizhangNV/structural-rt-cornell-demo/main/media/cornell-box-demo.webm
+[demo-video]: media/cornell-box-demo.webm?raw=true

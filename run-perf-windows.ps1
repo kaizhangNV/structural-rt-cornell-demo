@@ -73,6 +73,10 @@ $CommonCompilerArguments = @(
     "--entry", "RayGeneration", "raygeneration",
     "--legacy-entry", "PrimaryClosestHit", "closesthit",
     "--legacy-entry", "ShadowClosestHit", "closesthit",
+    "--legacy-entry", "PrimarySphereClosestHit", "closesthit",
+    "--legacy-entry", "ShadowSphereClosestHit", "closesthit",
+    "--legacy-entry", "PrimarySphereIntersection", "intersection",
+    "--legacy-entry", "ShadowSphereIntersection", "intersection",
     "--legacy-entry", "PrimaryMiss", "miss",
     "--legacy-entry", "ShadowMiss", "miss"
 )

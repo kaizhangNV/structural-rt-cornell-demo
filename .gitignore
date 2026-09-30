@@ -3,3 +3,4 @@
 /metal-cpp/
 /*.png
 /*.ppm
+__pycache__/

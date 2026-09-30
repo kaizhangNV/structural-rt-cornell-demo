@@ -18,6 +18,9 @@ constexpr uint32_t kPrimaryHitRecord = 1;
 constexpr uint32_t kPrimaryMissRecord = 1;
 constexpr uint32_t kShadowHitRecord = 4;
 constexpr uint32_t kShadowMissRecord = 4;
+constexpr uint32_t kSphereInstanceOffset = 8;
+constexpr uint32_t kPrimarySphereHitRecord = kSphereInstanceOffset + kPrimaryHitRecord;
+constexpr uint32_t kShadowSphereHitRecord = kSphereInstanceOffset + kShadowHitRecord;
 
 struct Float3
 {
@@ -70,7 +73,16 @@ struct FrameData
     uint32_t primaryMissRecord;
     uint32_t shadowHitRecord;
     uint32_t shadowMissRecord;
+    uint32_t samplesPerFrame;
+    uint32_t sampleOffset;
+    uint32_t maxBounces;
+    uint32_t viewMode;
+    float exposure;
+    float aoRadius;
+    uint32_t aoSamples;
+    uint32_t seed;
 };
+static_assert(sizeof(FrameData) == 128, "FrameData must match the shader ABI");
 
 struct Camera
 {
@@ -118,6 +130,7 @@ struct Camera
             kPrimaryMissRecord,
             kShadowHitRecord,
             kShadowMissRecord,
+            1, 0, 8, 0, 1.0f, 0.5f, 8, 1,
         };
     }
 };
@@ -131,13 +144,27 @@ struct Surface
 {
     float normal[4];
     float albedo[4];
+    float emission[4];
+    float parameters[4]; // x: diffuse=0, dielectric=1, emitter=2; y: IOR
+    float sphere[4]; // xyz: center, w: radius (zero for planar surfaces)
 };
+static_assert(sizeof(Surface) == 80, "Surface must match the shader ABI");
 
 struct SceneData
 {
     std::vector<Vertex> vertices;
     std::vector<Surface> surfaces;
+    struct AabbStorage
+    {
+        float min[3];
+        float max[3];
+    };
+    // Triangle materials first; the procedural sphere has one additional material.
+    std::vector<AabbStorage> sphereBounds;
+    uint32_t sphereSurfaceIndex = UINT32_MAX;
 };
+using Aabb = SceneData::AabbStorage;
+static_assert(sizeof(Aabb) == 24, "AABB must match native acceleration-structure input");
 
 inline Vertex vertex(float x, float y, float z)
 {
@@ -146,7 +173,7 @@ inline Vertex vertex(float x, float y, float z)
 
 inline Surface surface(float nx, float ny, float nz, float red, float green, float blue)
 {
-    return {{nx, ny, nz, 0.0f}, {red, green, blue, 1.0f}};
+    return {{nx, ny, nz, 0.0f}, {red, green, blue, 1.0f}, {}, {0, 1.5f, 0, 0}, {}};
 }
 
 inline void addTriangle(
@@ -228,7 +255,24 @@ inline void addBox(
         surface(0.0f, 1.0f, 0.0f, material.albedo[0], material.albedo[1], material.albedo[2]));
 }
 
-inline SceneData makeScene()
+// Bounds are only traversal candidates: a custom intersection shader solves the sphere.
+// Keep it in a separate BLAS so every backend sees the same triangle/procedural instances.
+inline void addSphere(SceneData& scene, Float3 center, float radius, bool glass)
+{
+    auto material = surface(0, 0, 0, 0.72f, 0.72f, 0.72f);
+    material.parameters[0] = glass ? 1.0f : 0.0f;
+    material.sphere[0] = center.x;
+    material.sphere[1] = center.y;
+    material.sphere[2] = center.z;
+    material.sphere[3] = radius;
+    scene.sphereSurfaceIndex = uint32_t(scene.surfaces.size());
+    scene.surfaces.push_back(material);
+    scene.sphereBounds.push_back({
+        {center.x - radius, center.y - radius, center.z - radius},
+        {center.x + radius, center.y + radius, center.z + radius}});
+}
+
+inline SceneData makeScene(uint32_t sphereMode = 0)
 {
     SceneData scene;
     const auto white = surface(0.0f, 0.0f, 0.0f, 0.76f, 0.73f, 0.66f);
@@ -269,8 +313,15 @@ inline SceneData makeScene()
         vertex(1.0f, 0.0f, 1.0f),
         surface(-1.0f, 0.0f, 0.0f, 0.08f, 0.45f, 0.12f));
 
-    addBox(scene, -0.78f, 0.0f, -0.35f, -0.12f, 0.62f, 0.38f, white);
-    addBox(scene, 0.16f, 0.0f, -0.68f, 0.76f, 1.18f, 0.08f, white);
+    addBox(scene, -0.90f, 0.0f, -0.75f, -0.35f, 0.55f, -0.30f, white);
+    addBox(scene, 0.35f, 0.0f, -0.90f, 0.85f, 1.10f, -0.35f, white);
+    auto light = surface(0, -1, 0, 0, 0, 0);
+    light.parameters[0] = 2;
+    light.emission[0] = 18; light.emission[1] = 16; light.emission[2] = 13;
+    addQuad(scene, vertex(-0.32f, 1.98f, -0.45f), vertex(0.32f, 1.98f, -0.45f),
+            vertex(0.32f, 1.98f, 0.15f), vertex(-0.32f, 1.98f, 0.15f), light);
+    if (sphereMode != 2)
+        addSphere(scene, {0.0f, 1.0f, 0.0f}, 0.30f, sphereMode == 0);
     return scene;
 }
 

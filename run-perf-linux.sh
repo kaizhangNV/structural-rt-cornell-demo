@@ -3,21 +3,23 @@
 set -euo pipefail
 
 demo_root="$(cd "$(dirname "$0")" && pwd)"
-slang_repo="${SLANG_REPO:-$demo_root/../another-slang-rt-integration}"
+if [[ -n "${SLANG_REPO:-}" ]]; then
+    slang_repo="$SLANG_REPO"
+elif [[ -d "$demo_root/../slang" ]]; then
+    slang_repo="$demo_root/../slang"
+else
+    slang_repo="$demo_root/../another-slang-rt-integration"
+fi
 slang_build="${SLANG_BUILD:-$slang_repo/build}"
 config="${SLANG_CONFIG:-Release}"
 compiler_root="${SLANG_PERF_COMPILER_ROOT:-$slang_build/Release}"
 compiler="${CXX:-c++}"
-limited_build="${LIMITED_BUILD_WRAPPER:-$HOME/.codex/skills/limit-cpp-build-parallelism/scripts/run-limited-build.sh}"
+native_build_jobs="${NATIVE_BUILD_JOBS:-8}"
 results_dir="${PERF_RESULTS_DIR:-$demo_root/perf-results/linux}"
 warmup="${PERF_WARMUP:-5}"
 iterations="${PERF_ITERATIONS:-50}"
 host_label="${PERF_HOST_LABEL:-$(uname -srmo); $(lscpu | sed -n 's/^Model name:[[:space:]]*//p' | head -n 1)}"
 
-if [[ ! -x "$limited_build" ]]; then
-    echo "native build limiter is not executable: $limited_build" >&2
-    exit 2
-fi
 if [[ ! -f "$compiler_root/lib/libslang-compiler.so" ]]; then
     echo "release Slang compiler package is missing under $compiler_root" >&2
     exit 2
@@ -27,6 +29,7 @@ mkdir -p "$demo_root/build" "$results_dir"
 
 # Build the sample host once and validate the structural output.
 SLANG_REPO="$slang_repo" SLANG_BUILD="$slang_build" SLANG_CONFIG="$config" \
+    NATIVE_BUILD_JOBS="$native_build_jobs" \
     "$demo_root/run-linux.sh" \
     --api structural \
     --backend vulkan \
@@ -63,7 +66,7 @@ for api in structural legacy; do
 done
 cmp "$results_dir/cornell-optix-structural.ppm" "$results_dir/cornell-optix-legacy.ppm"
 
-NATIVE_BUILD_JOBS=8 "$limited_build" "$compiler" \
+"$compiler" \
     -std=c++17 \
     -O2 \
     -I"$compiler_root/include" \
@@ -82,6 +85,10 @@ common_compile_arguments=(
     --entry RayGeneration raygeneration
     --legacy-entry PrimaryClosestHit closesthit
     --legacy-entry ShadowClosestHit closesthit
+    --legacy-entry PrimarySphereClosestHit closesthit
+    --legacy-entry ShadowSphereClosestHit closesthit
+    --legacy-entry PrimarySphereIntersection intersection
+    --legacy-entry ShadowSphereIntersection intersection
     --legacy-entry PrimaryMiss miss
     --legacy-entry ShadowMiss miss
 )

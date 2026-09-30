@@ -6,7 +6,7 @@ public struct PrimaryMiss : rt::IMissShader
 
     void invoke(rt::MissInput<Context> input)
     {
-        input.payload.hit = 0;
+        input.payload.surfaceIndex = 0xffffffff;
     }
 }
 

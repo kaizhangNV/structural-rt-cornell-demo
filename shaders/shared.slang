@@ -6,19 +6,28 @@ public struct Surface
 {
     public float4 normal;
     public float4 albedo;
+    public float4 emission;
+    public float4 parameters;
+    public float4 sphere;
 }
 
 public struct PrimaryPayload
 {
     public float3 hitPosition;
+    public float distance;
     public float3 normal;
-    public float3 albedo;
-    public uint hit;
+    public uint surfaceIndex;
 }
 
 public struct ShadowPayload
 {
     public uint occluded;
+}
+
+// Custom intersection attributes deliberately carry a geometric result to closest-hit.
+public struct SphereAttributes
+{
+    public float3 objectNormal;
 }
 
 public struct FrameData
@@ -34,6 +43,14 @@ public struct FrameData
     public uint primaryMissRecord;
     public uint shadowHitRecord;
     public uint shadowMissRecord;
+    public uint samplesPerFrame;
+    public uint sampleOffset;
+    public uint maxBounces;
+    public uint viewMode;
+    public float exposure;
+    public float aoRadius;
+    public uint aoSamples;
+    public uint seed;
 }
 
 public struct TraceContext : rt::ITraceContext
@@ -55,6 +72,22 @@ public struct ShadowHitContext : rt::IHitContext
     typealias TraceContext = ::TraceContext;
     typealias Payload = ShadowPayload;
     typealias Primitive = rt::TrianglePrimitive;
+    typealias Record = void;
+}
+
+public struct PrimarySphereHitContext : rt::IHitContext
+{
+    typealias TraceContext = ::TraceContext;
+    typealias Payload = PrimaryPayload;
+    typealias Primitive = rt::BoundingBoxPrimitive<SphereAttributes>;
+    typealias Record = void;
+}
+
+public struct ShadowSphereHitContext : rt::IHitContext
+{
+    typealias TraceContext = ::TraceContext;
+    typealias Payload = ShadowPayload;
+    typealias Primitive = rt::BoundingBoxPrimitive<SphereAttributes>;
     typealias Record = void;
 }
 

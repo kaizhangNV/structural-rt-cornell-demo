@@ -1,5 +1,8 @@
 # Dynamic-schema ray-tracing performance report
 
+Historical direct-lighting workload only. The later [path-tracer extension](path-tracer.md)
+changes the scene and rendering algorithm; the timings below are not path-tracing measurements.
+
 Generated 2026-09-14T12:36:15-07:00 from 15 benchmark result file(s).
 
 Structural refresh runs: `Linux: 20260914-cdecb7503-linux-isolated-v2`, `Windows: 20260914-cdecb7503-structural-final`, `macOS: 20260914-cdecb7503-metal-pair-final`.

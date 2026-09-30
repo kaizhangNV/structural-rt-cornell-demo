@@ -18,10 +18,27 @@ public struct ShadowHitGroup : rt::IHitGroup
     typealias Intersection = rt::NoIntersection<ShadowHitContext>;
 }
 
+public struct PrimarySphereHitGroup : rt::IHitGroup
+{
+    typealias Context = PrimarySphereHitContext;
+    typealias ClosestHit = PrimarySphereClosestHit;
+    typealias AnyHit = rt::NoAnyHit<PrimarySphereHitContext>;
+    typealias Intersection = PrimarySphereIntersection;
+}
+
+public struct ShadowSphereHitGroup : rt::IHitGroup
+{
+    typealias Context = ShadowSphereHitContext;
+    typealias ClosestHit = ShadowSphereClosestHit;
+    typealias AnyHit = rt::NoAnyHit<ShadowSphereHitContext>;
+    typealias Intersection = ShadowSphereIntersection;
+}
+
 public struct ProgramSchema : rt::ITraceProgramSchema
 {
     typealias TraceContext = ::TraceContext;
-    typealias HitGroups = rt::HitGroupList<PrimaryHitGroup, ShadowHitGroup>;
+    typealias HitGroups = rt::HitGroupList<PrimaryHitGroup, ShadowHitGroup,
+        PrimarySphereHitGroup, ShadowSphereHitGroup>;
     typealias MissShaders = rt::MissShaderList<PrimaryMiss, ShadowMiss>;
     typealias CallableShaders = rt::NoCallableShaders;
 }

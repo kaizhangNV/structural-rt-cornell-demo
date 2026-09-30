@@ -3,16 +3,18 @@
 set -euo pipefail
 
 demo_root="$(cd "$(dirname "$0")" && pwd)"
-slang_repo="${SLANG_REPO:-$demo_root/../another-slang-rt-integration}"
+if [[ -n "${SLANG_REPO:-}" ]]; then
+    slang_repo="$SLANG_REPO"
+elif [[ -d "$demo_root/../slang" ]]; then
+    slang_repo="$demo_root/../slang"
+else
+    slang_repo="$demo_root/../another-slang-rt-integration"
+fi
 slang_build="${SLANG_BUILD:-$slang_repo/build}"
 config="${SLANG_CONFIG:-Release}"
 compiler="${CXX:-c++}"
-limited_build="${LIMITED_BUILD_WRAPPER:-$HOME/.codex/skills/limit-cpp-build-parallelism/scripts/run-limited-build.sh}"
-
-if [[ ! -x "$limited_build" ]]; then
-    echo "native build limiter is not executable: $limited_build" >&2
-    exit 2
-fi
+native_build_jobs="${NATIVE_BUILD_JOBS:-8}"
+export CMAKE_BUILD_PARALLEL_LEVEL="$native_build_jobs"
 
 api="structural"
 for ((argument_index = 1; argument_index <= $#; ++argument_index)); do
@@ -32,7 +34,7 @@ fi
 
 mkdir -p "$demo_root/build" "$demo_root/generated"
 
-NATIVE_BUILD_JOBS=8 "$limited_build" cmake \
+cmake \
     -S "$demo_root/external/glfw" \
     -B "$demo_root/build/glfw" \
     -DGLFW_BUILD_DOCS=OFF \
@@ -40,9 +42,9 @@ NATIVE_BUILD_JOBS=8 "$limited_build" cmake \
     -DGLFW_BUILD_TESTS=OFF \
     -DGLFW_BUILD_WAYLAND=OFF \
     -DGLFW_BUILD_X11=ON
-NATIVE_BUILD_JOBS=8 "$limited_build" cmake --build "$demo_root/build/glfw" --parallel 8
+cmake --build "$demo_root/build/glfw" --parallel "$native_build_jobs"
 
-NATIVE_BUILD_JOBS=8 "$limited_build" "$compiler" \
+"$compiler" \
     -std=c++17 \
     -O2 \
     -I"$slang_repo/include" \
@@ -64,7 +66,7 @@ NATIVE_BUILD_JOBS=8 "$limited_build" "$compiler" \
         "$(git -C "$slang_repo" rev-parse HEAD)"
 )
 
-NATIVE_BUILD_JOBS=8 "$limited_build" "$compiler" \
+"$compiler" \
     -std=c++17 \
     -O2 \
     -I"$slang_repo/include" \
