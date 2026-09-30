@@ -27,7 +27,7 @@ bool traceOcclusion(float3 origin, float3 direction, float distance)
 }
 
 // Both API paths execute the same integrator, making comparisons about the API itself.
-#include "../shaders/path_tracing.slangh"
+#include "../shaders/path_tracing.slang"
 
 [shader("raygeneration")]
 void RayGeneration()

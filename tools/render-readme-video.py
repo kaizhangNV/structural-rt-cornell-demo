@@ -108,7 +108,7 @@ def main():
                 "resolution": [512, 512], "frames_per_second": FPS, "shots": {},
                 "renderer_sha256": digest(args.renderer),
                 "source_sha256": {str(path.relative_to(ROOT)): digest(path)
-                                  for path in [ROOT / "scene.h", *sorted((ROOT / "shaders").glob("*.slang*"))]}}
+                                  for path in [ROOT / "scene.h", *sorted((ROOT / "shaders").glob("*.slang"))]}}
     if args.reuse_rendered and any(previous.get(key) != manifest[key]
                                    for key in ("renderer_sha256", "source_sha256")):
         parser.error("Cannot reuse captures after renderer/source changes; run without --reuse-rendered")

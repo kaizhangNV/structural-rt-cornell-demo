@@ -79,7 +79,7 @@ class ImageAndProvenanceTest(unittest.TestCase):
             root = Path(directory)
             renderer = root / "renderer"
             renderer.write_bytes(b"host version 1")
-            shader = root / "shaders" / "sphere_intersection.slangh"
+            shader = root / "shaders" / "sphere_intersection.slang"
             shader.parent.mkdir()
             shader.write_text("intersection version 1", encoding="utf-8")
             before = validator.input_provenance(root, renderer)
@@ -87,8 +87,8 @@ class ImageAndProvenanceTest(unittest.TestCase):
             shader.write_text("intersection version 2", encoding="utf-8")
             after = validator.input_provenance(root, renderer)
             self.assertNotEqual(before["renderer_sha256"], after["renderer_sha256"])
-            self.assertNotEqual(before["source_sha256"]["shaders/sphere_intersection.slangh"],
-                                after["source_sha256"]["shaders/sphere_intersection.slangh"])
+            self.assertNotEqual(before["source_sha256"]["shaders/sphere_intersection.slang"],
+                                after["source_sha256"]["shaders/sphere_intersection.slang"])
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
-// Shared by the structural and legacy entry points. All traversal goes through
-// tracePrimary / traceOcclusion, so the material and sampling code is identical.
+// Textually included by both raygen.slang implementations, not imported as a module.
+// Traversal uses tracePrimary / traceOcclusion; material and sampling code is shared.
 static const float kPi = 3.14159265358979323846;
 static const float3 kLightEmission = float3(18.0, 16.0, 13.0);
 static const float3 kGlassAbsorption = float3(0.08, 0.025, 0.012);

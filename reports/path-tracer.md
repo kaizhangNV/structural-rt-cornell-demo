@@ -12,7 +12,10 @@ absorption. An ambient-occlusion view makes nearby occluders visible.
 
 - Structural Slang, legacy Slang, and hand-written Metal render the same scene and integrator.
 - Structural and legacy Slang share the material/sampling implementation, with separate tracing
-  adapters. This keeps their comparison focused on the ray-tracing API.
+  adapters. Both `raygen.slang` files textually include `shaders/path_tracing.slang` after
+  defining their tracing adapters; the shared source is not a separately imported module.
+  The intersection stages similarly include `shaders/sphere_intersection.slang`.
+  This keeps their comparison focused on the ray-tracing API.
 - Ray generation iteratively traces multiple bounces. Closest-hit returns a position, distance,
   normal, and material index; a separate small payload serves shadow and AO rays.
 - The host builds separate triangle and procedural-AABB acceleration structures. Sphere
@@ -135,6 +138,13 @@ For the beauty/glass case, OptiX differs from Vulkan in three RGB channels, Meta
 and D3D12 in one; every differing channel is one byte apart. The
 same-backend gate is not applied to this cross-backend comparison. These
 observations are not a promise of bitwise portability or evidence of an API-lane regression.
+
+After renaming the shared sources to `.slang`, Vulkan and OptiX headless suites were rerun:
+all five pairs, seeded repeats, and timing smoke checks pass, with renders unchanged from the
+scene-v2 results. Structural/legacy DXIL and PTX compile to byte-identical pre-rename outputs;
+generated Metal changes only source-filename directives, with its paired fingerprint refreshed.
+Windows/macOS runtime checks above precede this filename-only change and were not rerun for it.
+Rename-check artifacts are in `build/slang-extension-validation-{vulkan,optix}/`.
 
 Evidence locations (ignored build outputs are local artifacts):
 

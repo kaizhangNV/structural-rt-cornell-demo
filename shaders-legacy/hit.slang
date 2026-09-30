@@ -2,7 +2,7 @@ implementing rt_pipeline;
 
 public StructuredBuffer<Surface> surfaces;
 
-#include "../shaders/sphere_intersection.slangh"
+#include "../shaders/sphere_intersection.slang"
 
 [shader("closesthit")]
 void PrimaryClosestHit(

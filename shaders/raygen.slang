@@ -28,7 +28,7 @@ bool traceOcclusion(float3 origin, float3 direction, float distance)
     return payload.occluded != 0;
 }
 
-#include "path_tracing.slangh"
+#include "path_tracing.slang"
 
 [shader("raygeneration")]
 void RayGeneration()

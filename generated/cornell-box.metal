@@ -82,7 +82,7 @@ struct rt_TraceProgramDescriptor_0
 };
 
 
-#line 7 "shaders/path_tracing.slangh"
+#line 7 "shaders/path_tracing.slang"
 uint hashSeed_0(uint value_0)
 {
 
@@ -315,7 +315,7 @@ float3 RayDesc_direction_get_0(const RayDesc_0 thread* this_1)
 }
 
 
-#line 5 "shaders/sphere_intersection.slangh"
+#line 5 "shaders/sphere_intersection.slang"
 float sphereSqrt_0(float value_1)
 {
 
@@ -1053,7 +1053,7 @@ PrimaryPayload_0 tracePrimary_0(float3 origin_3, float3 direction_3, KernelConte
 }
 
 
-#line 25 "shaders/path_tracing.slangh"
+#line 25 "shaders/path_tracing.slang"
 float3 cosineHemisphere_0(float3 normal_3, uint thread* state_2)
 {
     float u_0 = randomFloat_1(state_2);
@@ -1180,7 +1180,7 @@ bool traceOcclusion_0(float3 origin_4, float3 direction_4, float distance_5, Ker
 }
 
 
-#line 53 "shaders/path_tracing.slangh"
+#line 53 "shaders/path_tracing.slang"
 float3 traceAmbientOcclusion_0(float3 origin_5, float3 direction_5, uint thread* state_3, KernelContext_0 thread* kernelContext_5)
 {
 

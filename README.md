@@ -287,8 +287,10 @@ that cross compiler revisions.
 - `shaders/miss.slang`: included primary and shadow miss stages.
 - `shaders/program_schema.slang`: included shader-program schema; it contains no SBT positions.
 - `shaders/raygen.slang`: included ray-generation entry point and structural trace adapters.
-- `shaders/path_tracing.slangh`: shared Slang integrator, materials, sampling, and display mapping.
-- `shaders/sphere_intersection.slangh`: shared analytic sphere roots and custom hit attributes.
+- `shaders/path_tracing.slang`: shared integrator, materials, sampling, and display mapping;
+  textually `#include`d by both `shaders/raygen.slang` and `shaders-legacy/raygen.slang`.
+- `shaders/sphere_intersection.slang`: shared analytic sphere roots and custom hit attributes;
+  textually `#include`d by the structural and legacy `hit.slang` implementations.
 - `shaders-legacy/`: equivalent old-API Slang ray-generation, hit, and miss shaders.
 - `shaders/cornell-box-native.metal`: equivalent hand-written native Metal intersector baseline.
 - `scene.h`: shared Cornell-box geometry and surface data.

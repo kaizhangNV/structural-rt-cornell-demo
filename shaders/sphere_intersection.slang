@@ -1,4 +1,4 @@
-// Shared analytic geometry for structural and legacy intersection stages.
+// Shared analytic geometry, textually included by both hit.slang implementations.
 // eb5be680b's structural stage contract omits the cuda_sm_2_0 capability carried
 // by the standard math overloads. Select CUDA's native float sqrt explicitly;
 // this is the same operation, not an approximate replacement or disabled check.

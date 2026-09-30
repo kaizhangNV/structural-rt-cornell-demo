@@ -36,7 +36,6 @@ def input_provenance(root: Path, renderer: Path) -> dict:
         "generated/program-schema.txt")]
     for directory in ("shaders", "shaders-legacy"):
         sources.extend((root / directory).glob("*.slang"))
-        sources.extend((root / directory).glob("*.slangh"))
     return {
         "renderer_sha256": file_sha256(renderer) if renderer.is_file() else None,
         "source_sha256": {
