@@ -4,7 +4,7 @@ This is a standalone path-tracing demo for the structural ray-tracing API. It is
 the Slang Git worktree and does not use `examples/example-base`.
 
 The shader progressively accumulates multi-bounce diffuse lighting from a ceiling area light.
-A small glass sphere floats at the room's center and adds Fresnel reflection, refraction,
+A glass sphere floats near the room's center and adds Fresnel reflection, refraction,
 total internal reflection, absorption, shadows, and refractive caustics. It is an analytic
 procedural sphere: AABB traversal invokes custom intersection programs, not a triangle mesh.
 A separate ambient-occlusion view shows finite-radius visibility. The path loop runs
@@ -38,7 +38,8 @@ an SBT contribution of 8 to the selectors in `FrameData`. The structural shader 
 `PrimaryPayload` and `ShadowPayload` partitions, each with triangle and procedural hit groups.
 
 Five Cornell-box walls, two interior boxes, and a ceiling light use triangles. The sphere has
-one AABB, center `(0, 1, 0)`, and radius `0.3` in a 2×2×2 room. Its intersection shader solves
+one AABB, center `(0, 0.75, 0)`, and radius `0.4` in a 2×2×2 room. It clears the floor by `0.35`
+units; the larger, lower sphere gives a more concentrated floor caustic. Its intersection shader solves
 the ray/sphere quadratic and reports the hit distance plus custom normal attributes. The path
 integrator implements glass reflection/refraction. GLFW owns
 the window and input on every platform; it is included as the `external/glfw` submodule. The Linux

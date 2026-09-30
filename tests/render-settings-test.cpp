@@ -147,8 +147,11 @@ static void checkScene(uint32_t sphereMode)
     const auto& material = scene.surfaces[scene.sphereSurfaceIndex];
     check(material.parameters[0] == (sphereMode == 0 ? 1 : 0) && material.parameters[1] == 1.5f,
           "procedural sphere material/IOR mismatch");
-    check(material.sphere[0] == 0 && material.sphere[1] == 1 && material.sphere[2] == 0 &&
-          material.sphere[3] == 0.30f, "sphere must be small and floating at the room center");
+    check(material.sphere[0] == 0 && material.sphere[1] == 0.75f && material.sphere[2] == 0 &&
+          material.sphere[3] == 0.40f, "sphere center/radius differs from the validated scene");
+    check(scene.sphereBounds[0].min[1] > 0 &&
+          std::abs(scene.sphereBounds[0].min[1] - 0.35f) < 1e-6f,
+          "sphere must remain floating 0.35 scene units above the floor");
     for (size_t axis = 0; axis < 3; ++axis)
     {
         check(scene.sphereBounds[0].min[axis] == material.sphere[axis] - material.sphere[3] &&

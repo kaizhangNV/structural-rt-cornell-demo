@@ -17,7 +17,7 @@ import sys
 import time
 
 
-SCENE_ID = "cornell-procedural-sphere-v1"
+SCENE_ID = "cornell-procedural-sphere-v2"
 
 
 def file_sha256(path: Path) -> str:
@@ -209,8 +209,8 @@ def run_suite(args: argparse.Namespace) -> bool:
         "expected_scene": {
             "id": SCENE_ID,
             "sphere_geometry": "analytic sphere in a procedural AABB",
-            "sphere_center": [0.0, 1.0, 0.0],
-            "sphere_radius": 0.30,
+            "sphere_center": [0.0, 0.75, 0.0],
+            "sphere_radius": 0.40,
         },
         "kind": args.kind,
         "backend": "metal" if args.kind == "metal" else args.backend,

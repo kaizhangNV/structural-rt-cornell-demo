@@ -36,7 +36,8 @@ class ValidationBookkeepingTest(unittest.TestCase):
                 self.assertEqual(checkpoint["status"], "running")
                 self.assertEqual(checkpoint["validation_schema_version"], 2)
                 self.assertEqual(checkpoint["expected_scene"]["id"], validator.SCENE_ID)
-                self.assertEqual(checkpoint["expected_scene"]["sphere_radius"], 0.30)
+                self.assertEqual(checkpoint["expected_scene"]["sphere_center"], [0.0, 0.75, 0.0])
+                self.assertEqual(checkpoint["expected_scene"]["sphere_radius"], 0.40)
                 raise OSError("simulated renderer failure")
 
             with patch.object(validator, "render", side_effect=interrupted_render):

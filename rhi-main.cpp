@@ -864,7 +864,7 @@ void writeRuntimeBenchmark(
            << "  \"max_bounces\": " << settings.bounces << ",\n"
            << "  \"view_mode\": " << settings.viewMode << ",\n"
            << "  \"sphere_mode\": " << settings.sphereMode << ",\n"
-           << "  \"scene\": \"cornell-procedural-sphere-v1\",\n"
+           << "  \"scene\": \"cornell-procedural-sphere-v2\",\n"
            << "  \"sphere_geometry\": \"custom-intersection-aabb\",\n"
            << "  \"seed\": " << settings.seed << ",\n"
            << "  \"ao_samples\": " << settings.aoSamples << ",\n"

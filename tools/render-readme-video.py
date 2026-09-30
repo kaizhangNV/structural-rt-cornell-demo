@@ -30,7 +30,7 @@ TEXT, MUTED, ACCENT = "#eef4f5", "#a5b4bf", "#63dfbd"
 # name, samples, view, seconds, section, title, description
 SHOTS = [
     ("beauty-4096", 4096, "beauty", 2, "SLANG / STRUCTURAL RT", "Analytic glass sphere",
-     ["Custom intersection stage", "Center (0, 1, 0); radius 0.30", "Reflection + refraction", "Rendered caustics + shadow"]),
+     ["Custom intersection stage", "Center (0, 0.75, 0); r = 0.40", "Reflection + refraction", "Rendered caustics + shadow"]),
     ("beauty-1", 1, "beauty", 1.5, "01 / CONVERGENCE", "1 sample / pixel",
      ["Fixed camera and seed", "Stochastic path sampling", "Eight maximum bounces"]),
     ("beauty-16", 16, "beauty", 1.5, "01 / CONVERGENCE", "16 samples / pixel",

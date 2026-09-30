@@ -321,7 +321,7 @@ inline SceneData makeScene(uint32_t sphereMode = 0)
     addQuad(scene, vertex(-0.32f, 1.98f, -0.45f), vertex(0.32f, 1.98f, -0.45f),
             vertex(0.32f, 1.98f, 0.15f), vertex(-0.32f, 1.98f, 0.15f), light);
     if (sphereMode != 2)
-        addSphere(scene, {0.0f, 1.0f, 0.0f}, 0.30f, sphereMode == 0);
+        addSphere(scene, {0.0f, 0.75f, 0.0f}, 0.40f, sphereMode == 0);
     return scene;
 }
 

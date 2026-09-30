@@ -1,8 +1,10 @@
 # Cornell path tracer
 
 The Cornell sample traces diffuse indirect lighting, soft area-light shadows, and refractive
-caustics from a floating glass sphere. Its center is `(0, 1, 0)` and radius is `0.3` in a 2×2×2
-room. **The sphere uses custom intersection programs over one AABB, not a triangle mesh.**
+caustics from a floating glass sphere. Its center is `(0, 0.75, 0)` and radius is `0.4` in a 2×2×2
+room, leaving `0.35` units of floor clearance. This is larger and lower than the initial sphere,
+so the caustic is more concentrated. **The sphere uses custom intersection programs over one AABB,
+not a triangle mesh.**
 Glass uses Fresnel reflection/refraction, total internal reflection, and distance-dependent
 absorption. An ambient-occlusion view makes nearby occluders visible.
 
@@ -119,36 +121,35 @@ source and schema reflection are emitted together and checked as a fingerprinted
 
 | Platform/backend | Five image pairs and seeded repeat | GPU timing smoke | Interactive display |
 | --- | --- | --- | --- |
-| Linux / Vulkan | Pass; four exact pairs, diffuse differs in one channel by one byte | Pass, both APIs | Earlier mesh scene passed; procedural window not rerun |
+| Linux / Vulkan | Pass; every structural/legacy pair is byte-identical | Pass, both APIs | Earlier mesh scene passed; procedural window not rerun |
 | Linux / OptiX | Pass; every structural/legacy pair is byte-identical | Pass, both APIs | **Disabled after desktop crash** |
 | Windows / D3D12 | Pass; every structural/legacy pair is byte-identical | Pass, both APIs | Earlier window attempt blocked in SSH service session |
-| macOS / Metal | Pass; four exact pairs, diffuse differs in one channel by one byte | Pass, both implementations | Earlier mesh scene passed; procedural window not rerun |
+| macOS / Metal | Pass; four exact pairs, beauty/glass differs in one channel by one byte | Pass, both implementations | Earlier mesh scene passed; procedural window not rerun |
 
 All completed suites pass nonconstant-image, grayscale-AO, material/lighting-control, and
 fixed-seed repeatability checks. Vulkan convergence RMSE against 1024 spp decreases from
-15.432 (16 spp), to 10.954 (64 spp), to 5.936 (256 spp). This is display-space image error,
+14.063 (16 spp), to 10.482 (64 spp), to 5.859 (256 spp). This is display-space image error,
 not an estimate of rendering performance.
 
-For the beauty/glass case, OptiX differs from Vulkan in two RGB channels (maximum three bytes).
-Metal differs in six channels (MAE 0.002134, maximum 82 bytes); D3D12 differs in three channels
-(MAE 0.002107, maximum 82 bytes). A few stochastic paths diverge across backends. The
+For the beauty/glass case, OptiX differs from Vulkan in three RGB channels, Metal in six,
+and D3D12 in one; every differing channel is one byte apart. The
 same-backend gate is not applied to this cross-backend comparison. These
 observations are not a promise of bitwise portability or evidence of an API-lane regression.
 
 Evidence locations (ignored build outputs are local artifacts):
 
-- Vulkan: `build/procedural-validation-vulkan-final/validation.json`.
-- OptiX: `build/procedural-validation-optix/validation.json`.
-- Metal: `build/procedural-validation-macos-final/validation.json`, farm run
-  `structural-rt-cornell-pathtracer/20260930-133244` on Apple M4.
-- Windows: `build/procedural-validation-windows-final/validation.json`, farm run
-  `structural-rt-cornell-pathtracer/20260930-133523` on NVIDIA RTX 3500 Ada Generation Laptop GPU.
-  The initial attempt was blocked before build/test by SSH banner timeouts; the rerun passed
-  after the user restarted OpenSSH. No RDP or agent-side service change was used.
+- Vulkan: `build/procedural-v2-validation-vulkan/validation.json`.
+- OptiX: `build/procedural-v2-validation-optix/validation.json`.
+- Metal: `build/procedural-v2-validation-macos/validation.json`, farm run
+  `structural-rt-cornell-pathtracer/20260930-134506` on Apple M4.
+- Windows: `build/procedural-v2-validation-windows/validation.json`, the same farm run,
+  on NVIDIA RTX 3500 Ada Generation Laptop GPU. SSH connectivity checks and both workers
+  passed on this rerun. No RDP or agent-side service change was used.
 
-New validation JSON records scene `cornell-procedural-sphere-v1`, schema version 2, and
+New validation JSON records scene `cornell-procedural-sphere-v2`, schema version 2, and
 renderer/source SHA256 fingerprints. Old `build/pathtracer-validation-*` outputs are for the
-triangle sphere and are **not** procedural validation. The earlier Vulkan/Metal window passes
+triangle sphere; `build/procedural-validation-*` outputs use the first, smaller procedural
+sphere. Neither is validation of this larger/lower scene. The earlier Vulkan/Metal window passes
 do not establish window presentation for the new procedural scene.
 
 Windows structural D3D12 exited 1 at `configure window surface` before rendering a window
@@ -178,11 +179,13 @@ The [README video](../media/cornell-box-demo.webm?raw=true) is a 20-second edite
 showcase, not an FPS recording. Rebuild it with `python3 tools/render-readme-video.py
 --ffmpeg /path/to/ffmpeg` after building the Linux renderer; it needs Pillow, FFmpeg with
 libvpx, and DejaVu Sans fonts. All captures use headless Vulkan and are saved with commands
-and hashes under `build/readme-video/`.
+and hashes under `build/readme-video/` by default; this refresh used `--work-dir
+build/readme-video-larger` to preserve the earlier captures.
 
-A 4096-spp no-sphere control verifies the floor effect: the caustic region `(220,360)–(292,390)`
-in the 512×512 image brightens by 9.64 display-RGB byte values on average, while surrounding
-floor regions darken by approximately 15–16. This is an image-space visibility check, not a
+A 4096-spp no-sphere control verifies the floor effect: the caustic region `(228,362)–(284,380)`
+in the 512×512 image brightens by 32.01 display-RGB byte values on average, while surrounding
+floor regions darken by approximately 24–47. This region follows the new focused footprint;
+it is not the earlier sphere's measurement region. This is an image-space visibility check, not a
 radiometric accuracy claim. The bright pool is produced by refracted paths, not an added decal.
 
 ![Path-traced Cornell box with central glass sphere](../media/cornell-pathtracer-beauty.png)

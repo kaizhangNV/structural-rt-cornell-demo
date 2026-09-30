@@ -901,7 +901,7 @@ void writeRuntimeBenchmark(
            << "  \"schema\": \"slang-ray-tracing-perf-v1\",\n"
            << "  \"kind\": \"runtime\",\n"
            << "  \"backend\": \"Metal\",\n"
-           << "  \"scene\": \"cornell-procedural-sphere-v1\",\n"
+           << "  \"scene\": \"cornell-procedural-sphere-v2\",\n"
            << "  \"sphere_geometry\": \"custom-intersection-aabb\",\n"
            << "  \"implementation\": \"" << (native ? "native" : "structural") << "\",\n"
            << "  \"device\": \"" << jsonEscape(device->name()->utf8String()) << "\",\n"
