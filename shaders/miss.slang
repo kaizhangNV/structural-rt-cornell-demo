@@ -1,16 +1,20 @@
 implementing rt_pipeline;
 
-public struct PrimaryMiss : rt::IMissShader<MissContext>
+public struct PrimaryMiss : rt::IMissShader
 {
-    void invoke(rt::MissInput<MissContext> input)
+    typealias Context = PrimaryMissContext;
+
+    void invoke(rt::MissInput<Context> input)
     {
         input.payload.hit = 0;
     }
 }
 
-public struct ShadowMiss : rt::IMissShader<MissContext>
+public struct ShadowMiss : rt::IMissShader
 {
-    void invoke(rt::MissInput<MissContext> input)
+    typealias Context = ShadowMissContext;
+
+    void invoke(rt::MissInput<Context> input)
     {
         input.payload.occluded = 0;
     }

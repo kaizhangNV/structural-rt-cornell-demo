@@ -1,5 +1,5 @@
 param(
-    [string] $SlangRepo = (Join-Path $PSScriptRoot "../another-slang-rt-recovery"),
+    [string] $SlangRepo = (Join-Path $PSScriptRoot "../another-slang-rt-integration"),
     [string] $SlangBuild = "",
     [ValidateSet("Debug", "Release", "RelWithDebInfo")]
     [string] $Config = "Debug",
@@ -50,9 +50,6 @@ $Arguments = @(
     "--backend", "d3d12",
     "--api", $Api
 )
-if ($Api -eq "structural") {
-    $Arguments += @("--reflection-output", (Join-Path $PSScriptRoot "generated/program-layout.txt"))
-}
 if ($Headless) {
     $Arguments += "--headless"
 }

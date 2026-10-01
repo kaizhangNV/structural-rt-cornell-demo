@@ -28,6 +28,12 @@ public struct FrameData
     public uint2 imageSize;
     public uint rowStride;
     public uint outputBgra;
+    // Keep the host constant-buffer ABI identical to the structural path. The legacy shader does
+    // not consume these host-owned structural record selectors.
+    public uint primaryHitRecord;
+    public uint primaryMissRecord;
+    public uint shadowHitRecord;
+    public uint shadowMissRecord;
 }
 
 public RayDesc makeRay(float3 origin, float3 direction, float tMax)

@@ -28,6 +28,7 @@ struct Options
 {
     std::string output;
     std::string hostLabel;
+    std::string inputProvenance;
     uint32_t warmupCount = 3;
     uint32_t iterationCount = 20;
     std::vector<Case> cases;
@@ -50,6 +51,8 @@ Options parseOptions(int argc, char** argv)
             options.output = argv[++i];
         else if (std::strcmp(argv[i], "--host-label") == 0 && i + 1 < argc)
             options.hostLabel = argv[++i];
+        else if (std::strcmp(argv[i], "--input-provenance") == 0 && i + 1 < argc)
+            options.inputProvenance = argv[++i];
         else if (std::strcmp(argv[i], "--warmup") == 0 && i + 1 < argc)
             options.warmupCount = uint32_t(std::stoul(argv[++i]));
         else if (std::strcmp(argv[i], "--iterations") == 0 && i + 1 < argc)
@@ -145,6 +148,8 @@ void writeOutput(const Options& options, MTL::Device* device)
            << "  \"kind\": \"metal_downstream_compile\",\n"
            << "  \"target\": \"metal\",\n"
            << "  \"host\": \"" << jsonEscape(options.hostLabel.c_str()) << "\",\n"
+           << "  \"input_provenance\": \"" << jsonEscape(options.inputProvenance.c_str())
+           << "\",\n"
            << "  \"device\": \"" << jsonEscape(device->name()->utf8String()) << "\",\n"
            << "  \"metric\": \"synchronous MTLDevice newLibrary(source) wall time\",\n"
            << "  \"unit\": \"ms\",\n"

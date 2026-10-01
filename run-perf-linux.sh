@@ -3,9 +3,9 @@
 set -euo pipefail
 
 demo_root="$(cd "$(dirname "$0")" && pwd)"
-slang_repo="${SLANG_REPO:-$demo_root/../another-slang-rt-recovery}"
+slang_repo="${SLANG_REPO:-$demo_root/../another-slang-rt-integration}"
 slang_build="${SLANG_BUILD:-$slang_repo/build}"
-config="${SLANG_CONFIG:-Debug}"
+config="${SLANG_CONFIG:-Release}"
 compiler_root="${SLANG_PERF_COMPILER_ROOT:-$slang_build/Release}"
 compiler="${CXX:-c++}"
 limited_build="${LIMITED_BUILD_WRAPPER:-$HOME/.codex/skills/limit-cpp-build-parallelism/scripts/run-limited-build.sh}"
@@ -45,6 +45,24 @@ LD_LIBRARY_PATH="$runtime_library_path" "$host" \
     --output "$results_dir/cornell-legacy.ppm"
 cmp "$results_dir/cornell-structural.ppm" "$results_dir/cornell-legacy.ppm"
 
+# OptiX uses the same split structural payloads through a different native payload ABI. Keep it as
+# a separate correctness and runtime lane; this caught a payload-register count regression during
+# the schema migration.
+for api in structural legacy; do
+    shader_directory="$demo_root/shaders"
+    if [[ "$api" == "legacy" ]]; then
+        shader_directory="$demo_root/shaders-legacy"
+    fi
+    LD_LIBRARY_PATH="$runtime_library_path" "$host" \
+        "$shader_directory" \
+        --api "$api" \
+        --backend optix \
+        --optix-include "$slang_repo/external/optix-dev/include" \
+        --headless \
+        --output "$results_dir/cornell-optix-$api.ppm"
+done
+cmp "$results_dir/cornell-optix-structural.ppm" "$results_dir/cornell-optix-legacy.ppm"
+
 NATIVE_BUILD_JOBS=8 "$limited_build" "$compiler" \
     -std=c++17 \
     -O2 \
@@ -62,25 +80,33 @@ common_compile_arguments=(
     --warmup "$warmup"
     --iterations "$iterations"
     --entry RayGeneration raygeneration
-    --entry PrimaryClosestHit closesthit
-    --entry ShadowClosestHit closesthit
-    --entry PrimaryMiss miss
-    --entry ShadowMiss miss
+    --legacy-entry PrimaryClosestHit closesthit
+    --legacy-entry ShadowClosestHit closesthit
+    --legacy-entry PrimaryMiss miss
+    --legacy-entry ShadowMiss miss
 )
 
 "$compile_benchmark" \
     --target spirv \
-    --output "$results_dir/compile-spirv.json" \
-    --case structural "$demo_root/shaders" rt_pipeline experimental \
-    --case legacy "$demo_root/shaders-legacy" rt_pipeline standard \
+    --output "$results_dir/compile-spirv-structural.json" \
+    --case structural "$demo_root/shaders" rt_pipeline experimental ProgramSchema \
     "${common_compile_arguments[@]}"
 
 # Metal has no legacy Slang API lane; this records only Slang-to-MSL generation.
 "$compile_benchmark" \
     --target metal \
     --output "$results_dir/compile-metal-slang.json" \
-    --case structural "$demo_root/shaders" rt_pipeline experimental \
+    --case structural "$demo_root/shaders" rt_pipeline experimental ProgramSchema \
     "${common_compile_arguments[@]}"
+
+LD_LIBRARY_PATH="$runtime_library_path" "$host" \
+    "$demo_root/shaders" \
+    --api structural \
+    --backend vulkan \
+    --benchmark \
+    --warmup "$warmup" \
+    --iterations "$iterations" \
+    --benchmark-output "$results_dir/runtime-vulkan-structural.json"
 
 for api in structural legacy; do
     shader_directory="$demo_root/shaders"
@@ -90,13 +116,20 @@ for api in structural legacy; do
     LD_LIBRARY_PATH="$runtime_library_path" "$host" \
         "$shader_directory" \
         --api "$api" \
-        --backend vulkan \
+        --backend optix \
+        --optix-include "$slang_repo/external/optix-dev/include" \
         --benchmark \
         --warmup "$warmup" \
         --iterations "$iterations" \
-        --benchmark-output "$results_dir/runtime-vulkan-$api.json"
+        --benchmark-output "$results_dir/runtime-optix-$api.json"
 done
 
 python3 "$demo_root/perf/report.py" \
     --input-dir "$demo_root/perf-results" \
     --output "$demo_root/reports/performance.md"
+
+for result in "$results_dir"/*.json; do
+    echo "PERF_RESULT_BEGIN $(basename "$result")"
+    sed -n '1,100000p' "$result"
+    echo "PERF_RESULT_END $(basename "$result")"
+done

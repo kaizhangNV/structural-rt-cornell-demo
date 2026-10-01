@@ -17,39 +17,38 @@ mkdir -p "$results_dir"
     --output "$results_dir/cornell-structural.ppm"
 
 host="$demo_root/build/structural-rt-cornell-metal"
-layout="$demo_root/generated/program-layout.txt"
+manifest="$demo_root/generated/program-schema.txt"
+structural_provenance="$(sed -n 's/^compiler "\([^"]*\)" "\([^"]*\)"$/\1; source \2/p' "$manifest")"
+if [[ -z "$structural_provenance" ]]; then
+    echo "generated schema manifest has no compiler/source provenance" >&2
+    exit 1
+fi
 
 # Validate the native Metal implementation against the same scene and checksum.
 "$host" \
     "$demo_root/shaders/cornell-box-native.metal" \
-    "$layout" \
+    "$manifest" \
     --implementation native \
     --headless \
     --output "$results_dir/cornell-native.ppm"
 cmp "$results_dir/cornell-structural.ppm" "$results_dir/cornell-native.ppm"
 
 "$demo_root/build/metal-compile-benchmark" \
-    --output "$results_dir/compile-metal-downstream.json" \
+    --output "$results_dir/compile-metal-downstream-structural.json" \
     --host-label "$host_label" \
+    --input-provenance "$structural_provenance" \
     --warmup "$warmup" \
     --iterations "$iterations" \
-    --case structural-generated "$demo_root/generated/cornell-box.metal" \
-    --case native-handwritten "$demo_root/shaders/cornell-box-native.metal"
+    --case structural-generated "$demo_root/generated/cornell-box.metal"
 
-for implementation in structural native; do
-    source="$demo_root/generated/cornell-box.metal"
-    if [[ "$implementation" == "native" ]]; then
-        source="$demo_root/shaders/cornell-box-native.metal"
-    fi
-    "$host" \
-        "$source" \
-        "$layout" \
-        --implementation "$implementation" \
-        --benchmark \
-        --warmup "$warmup" \
-        --iterations "$iterations" \
-        --benchmark-output "$results_dir/runtime-metal-$implementation.json"
-done
+"$host" \
+    "$demo_root/generated/cornell-box.metal" \
+    "$manifest" \
+    --implementation structural \
+    --benchmark \
+    --warmup "$warmup" \
+    --iterations "$iterations" \
+    --benchmark-output "$results_dir/runtime-metal-structural.json"
 
 for result in "$results_dir"/*.json; do
     echo "PERF_RESULT_BEGIN $(basename "$result")"

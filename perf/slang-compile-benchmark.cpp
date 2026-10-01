@@ -1,3 +1,5 @@
+#include "../program-schema-reflection.h"
+
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
@@ -21,6 +23,7 @@ struct Case
     std::string name;
     std::string searchPath;
     std::string module;
+    std::string schemaName;
     bool experimental = false;
     std::vector<double> wallSamples;
     std::vector<double> slangSamples;
@@ -31,7 +34,9 @@ struct Case
 struct Entry
 {
     std::string name;
+    std::string targetName;
     SlangStage stage;
+    bool legacyOnly = false;
 };
 
 struct Options
@@ -127,7 +132,7 @@ Options parseOptions(int argc, char** argv)
         }
         else if (std::strcmp(argv[i], "--case") == 0)
         {
-            require(4);
+            require(5);
             Case value;
             value.name = argv[++i];
             value.searchPath = argv[++i];
@@ -137,14 +142,21 @@ Options parseOptions(int argc, char** argv)
                 value.experimental = true;
             else if (mode != "standard")
                 throw std::runtime_error("case mode must be 'standard' or 'experimental'");
+            value.schemaName = argv[++i];
+            if (value.schemaName == "-")
+                value.schemaName.clear();
             options.cases.push_back(std::move(value));
         }
-        else if (std::strcmp(argv[i], "--entry") == 0)
+        else if (
+            std::strcmp(argv[i], "--entry") == 0 ||
+            std::strcmp(argv[i], "--legacy-entry") == 0)
         {
+            const bool legacyOnly = std::strcmp(argv[i], "--legacy-entry") == 0;
             require(2);
             Entry entry;
             entry.name = argv[++i];
             entry.stage = parseStage(argv[++i]);
+            entry.legacyOnly = legacyOnly;
             options.entries.push_back(std::move(entry));
         }
         else
@@ -175,7 +187,7 @@ CompileResult compileOnce(
     const Options& options,
     const Case& benchmarkCase)
 {
-    slang::CompilerOptionEntry targetOptions[2] = {};
+    slang::CompilerOptionEntry targetOptions[3] = {};
     uint32_t targetOptionCount = 0;
     targetOptions[targetOptionCount].name = slang::CompilerOptionName::Optimization;
     targetOptions[targetOptionCount].value.kind = slang::CompilerOptionValueKind::Int;
@@ -185,6 +197,15 @@ CompileResult compileOnce(
         targetOptions[targetOptionCount].name = slang::CompilerOptionName::EmitSpirvDirectly;
         targetOptions[targetOptionCount].value.kind = slang::CompilerOptionValueKind::Int;
         targetOptions[targetOptionCount++].value.intValue0 = 1;
+    }
+    else if (options.target == "metal")
+    {
+        const auto metal31 = globalSession->findCapability("metallib_3_1");
+        if (metal31 == SLANG_CAPABILITY_UNKNOWN)
+            throw std::runtime_error("find Metal 3.1 target capability");
+        targetOptions[targetOptionCount].name = slang::CompilerOptionName::Capability;
+        targetOptions[targetOptionCount].value.kind = slang::CompilerOptionValueKind::Int;
+        targetOptions[targetOptionCount++].value.intValue0 = int32_t(metal31);
     }
 
     slang::TargetDesc target = {};
@@ -231,22 +252,81 @@ CompileResult compileOnce(
     if (!module)
         throw std::runtime_error("load Slang module");
 
-    std::vector<ComPtr<slang::IEntryPoint>> entryPoints;
-    std::vector<slang::IComponentType*> components = {module};
-    for (const auto& entry : options.entries)
+    std::vector<Entry> selectedEntries;
+    const auto addEntry = [&](Entry entry)
     {
-        ComPtr<slang::IEntryPoint> entryPoint;
+        if (entry.name.empty())
+            return;
+        const auto existing = std::find_if(
+            selectedEntries.begin(),
+            selectedEntries.end(),
+            [&](const Entry& value) { return value.name == entry.name && value.stage == entry.stage; });
+        if (existing == selectedEntries.end())
+        {
+            selectedEntries.push_back(std::move(entry));
+            return;
+        }
+        if (!existing->targetName.empty() && !entry.targetName.empty() &&
+            existing->targetName != entry.targetName)
+            throw std::runtime_error("one source stage reflects multiple target entry-point names");
+        if (existing->targetName.empty())
+            existing->targetName = std::move(entry.targetName);
+    };
+    for (const auto& entry : options.entries)
+        if (!entry.legacyOnly || benchmarkCase.schemaName.empty())
+            addEntry(entry);
+
+    if (!benchmarkCase.schemaName.empty())
+    {
+        const auto schema =
+            reflectProgramSchema(module->getLayout(), benchmarkCase.schemaName.c_str());
+        const auto addStage = [&](const ReflectedStage& stage, SlangStage kind)
+        {
+            addEntry({stage.sourceName, stage.entryPointName, kind, false});
+        };
+        for (const auto& payload : schema.payloads)
+        {
+            for (const auto& group : payload.hitGroups)
+            {
+                addStage(group.closestHit, SLANG_STAGE_CLOSEST_HIT);
+                addStage(group.anyHit, SLANG_STAGE_ANY_HIT);
+                addStage(group.intersection, SLANG_STAGE_INTERSECTION);
+            }
+            for (const auto& shader : payload.missShaders)
+                addStage(shader.stage, SLANG_STAGE_MISS);
+        }
+        for (const auto& shader : schema.callableShaders)
+            addStage(shader.stage, SLANG_STAGE_CALLABLE);
+    }
+
+    if (selectedEntries.empty())
+        throw std::runtime_error("benchmark case has no selected entry points");
+
+    std::vector<ComPtr<slang::IComponentType>> selectedComponents;
+    std::vector<slang::IComponentType*> components = {module};
+    for (const auto& entry : selectedEntries)
+    {
+        ComPtr<slang::IEntryPoint> sourceEntryPoint;
         diagnostics.setNull();
         check(
             module->findAndCheckEntryPoint(
                 entry.name.c_str(),
                 entry.stage,
-                entryPoint.writeRef(),
+                sourceEntryPoint.writeRef(),
                 diagnostics.writeRef()),
             diagnostics,
             entry.name.c_str());
-        entryPoints.push_back(entryPoint);
-        components.push_back(entryPoint);
+        ComPtr<slang::IComponentType> selected(sourceEntryPoint.get());
+        if (options.target == "metal" && !entry.targetName.empty())
+        {
+            selected.setNull();
+            check(
+                sourceEntryPoint->renameEntryPoint(entry.targetName.c_str(), selected.writeRef()),
+                nullptr,
+                "rename structural Metal entry point");
+        }
+        selectedComponents.push_back(selected);
+        components.push_back(selected);
     }
 
     ComPtr<slang::IComponentType> composed;
@@ -269,16 +349,26 @@ CompileResult compileOnce(
         // slang-rhi obtains those libraries through getEntryPointCode(). Measure that same
         // downstream path. Whole-target DXIL extraction is not supported by every DXC/Slang
         // configuration on Windows.
-        for (size_t i = 0; i < entryPoints.size(); ++i)
+        for (size_t i = 0; i < selectedEntries.size(); ++i)
         {
             ComPtr<slang::IBlob> code;
             diagnostics.setNull();
             check(
                 linked->getEntryPointCode(SlangInt(i), 0, code.writeRef(), diagnostics.writeRef()),
                 diagnostics,
-                options.entries[i].name.c_str());
+                selectedEntries[i].name.c_str());
             codeSize += code->getBufferSize();
         }
+    }
+    else if (options.target == "metal")
+    {
+        ComPtr<slang::IBlob> code;
+        diagnostics.setNull();
+        check(
+            linked->getEntryPointCode(0, 0, code.writeRef(), diagnostics.writeRef()),
+            diagnostics,
+            "generate Metal ray-generation code");
+        codeSize = code->getBufferSize();
     }
     else
     {
@@ -386,7 +476,9 @@ void writeOutput(const Options& options)
            << "  \"sample_count\": " << options.iterationCount << ",\n"
            << "  \"measurement\": {\n"
            << "    \"total_wall_ms\": \"createSession through "
-           << (options.target == "dxil" ? "all getEntryPointCode calls" : "getTargetCode")
+           << (options.target == "dxil"    ? "all getEntryPointCode calls"
+               : options.target == "metal" ? "ray-generation getEntryPointCode"
+                                            : "getTargetCode")
            << "\",\n"
            << "    \"downstream_ms\": \"Slang IGlobalSession downstream timer delta\",\n"
            << "    \"slang_ms\": \"total wall time minus downstream timer delta\"\n"
@@ -396,6 +488,7 @@ void writeOutput(const Options& options)
         const auto& value = options.cases[i];
         stream << "    {\n"
                << "      \"name\": \"" << jsonEscape(value.name) << "\",\n"
+               << "      \"schema\": \"" << jsonEscape(value.schemaName) << "\",\n"
                << "      \"code_size_bytes\": " << value.codeSize << ",\n";
         writeMetric(stream, "total_wall_ms", value.wallSamples, true);
         writeMetric(stream, "slang_ms", value.slangSamples, true);
